@@ -1,4 +1,4 @@
-#\!/bin/bash
+#!/bin/bash
 WORKER_ID=$1
 MASTER_IP=$2
 CHAT_ID=$3
@@ -12,20 +12,67 @@ send_tg() {
     2>/dev/null || true
 }
 
+get_skills_json() {
+  python3 -c "
+import json, glob, os
+seen = set()
+skills = []
+# Local skills + shared NFS skills (deduplicated by name)
+for pattern in ['/opt/skills/*.json', '/mnt/shared/skills/*.json']:
+    for f in sorted(glob.glob(pattern)):
+        try:
+            s = json.load(open(f))
+            if s.get('name') not in seen:
+                seen.add(s['name'])
+                skills.append(s)
+        except: pass
+print(json.dumps(skills))
+" 2>/dev/null || echo "[]"
+}
+
+# Sync local skills to NFS on startup so others can use them
+sync_skills_to_nfs() {
+  python3 -c "
+import json, glob, shutil, os
+os.makedirs('/mnt/shared/skills', exist_ok=True)
+for f in glob.glob('/opt/skills/*.json'):
+    try:
+        s = json.load(open(f))
+        s['origin'] = '${WORKER_ID}'
+        dest = '/mnt/shared/skills/' + os.path.basename(f)
+        # Only write if not already there from another worker (avoid overwrite)
+        if not os.path.exists(dest):
+            with open(dest, 'w') as out: json.dump(s, out)
+    except: pass
+" 2>/dev/null || true
+}
+
 PUBLIC_IP=$(curl -s --max-time 5 http://checkip.amazonaws.com 2>/dev/null || hostname -I | awk '{print $1}')
+sync_skills_to_nfs
 send_tg "✅ *${WORKER_ID}* started — IP: ${PUBLIC_IP}"
 
 while true; do
   STATUS=$(systemctl is-active openclaw)
   TASK=$(cat /tmp/current_task 2>/dev/null || echo "idle")
+  SKILLS=$(get_skills_json)
 
-  # Heartbeat to master
+  PAYLOAD=$(python3 -c "
+import json
+print(json.dumps({
+  'id': '${WORKER_ID}',
+  'status': '${STATUS}',
+  'task': '${TASK}',
+  'ip': '${PUBLIC_IP}',
+  'vnc_port': 6080,
+  'skills': ${SKILLS}
+}))")
+
   curl -s -X POST "http://${MASTER_IP}:3000/worker/heartbeat" \
     -H "Content-Type: application/json" \
-    -d "{\"id\":\"${WORKER_ID}\",\"status\":\"${STATUS}\",\"task\":\"${TASK}\",\"ip\":\"${PUBLIC_IP}\",\"vnc_port\":6080}" \
+    -d "$PAYLOAD" \
     2>/dev/null || true
 
-  if [ "$STATUS" \!= "active" ]; then
+  if [ "$STATUS" != "active" ]; then
     echo "$(date): OpenClaw not active (${STATUS}), restarting..." >> $LOG
     send_tg "⚠️ *${WORKER_ID}* openclaw ${STATUS} — restarting"
     systemctl restart openclaw
@@ -33,7 +80,6 @@ while true; do
     continue
   fi
 
-  # Check for errors
   ERRORS=$(journalctl -u openclaw --since "1 minute ago" -q 2>/dev/null | grep -i "error\|fatal\|crash" | wc -l)
   if [ "$ERRORS" -gt 5 ]; then
     echo "$(date): Too many errors ($ERRORS), restarting..." >> $LOG
@@ -42,7 +88,6 @@ while true; do
     sleep 15
   fi
 
-  # Poll master for task
   TASK_RESP=$(curl -s "http://${MASTER_IP}:3000/worker/task/${WORKER_ID}" 2>/dev/null)
   TASK_ID=$(echo "$TASK_RESP" | python3 -c "import json,sys; d=json.load(sys.stdin); t=d.get('task'); print(t['id'] if t else '')" 2>/dev/null)
   TASK_DESC=$(echo "$TASK_RESP" | python3 -c "import json,sys; d=json.load(sys.stdin); t=d.get('task'); print(t.get('description','') if t else '')" 2>/dev/null)
