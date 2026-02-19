@@ -418,8 +418,8 @@ function useForceGraph(nodes, edges, width, height) {
   return posRef.current;
 }
 
-function SkillGraph({ workers, skills }) {
-  const W = 900, H = 480;
+function SkillGraph({ workers, skills, onRefresh }) {
+  const W = 960, H = 560;
   const [hovered, setHovered] = useState(null);
 
   const nodes = [
@@ -427,19 +427,45 @@ function SkillGraph({ workers, skills }) {
     ...skills.map(s => ({ id: 's:' + s.name, type: 'skill', label: s.name, data: s })),
   ];
 
-  const edges = [];
+  // worker→skill edges (dashed, dim)
+  const workerEdges = [];
   workers.forEach(w => {
     (w.skills || []).forEach(sk => {
       if (skills.find(s => s.name === sk.name)) {
-        edges.push(['w:' + w.id, 's:' + sk.name]);
+        workerEdges.push(['w:' + w.id, 's:' + sk.name]);
       }
     });
   });
 
-  const pos = useForceGraph(nodes, edges, W, H);
+  // skill→skill dependency edges (solid, directed)
+  const skillEdges = [];
+  skills.forEach(s => {
+    (s.parents || []).forEach(parentName => {
+      if (skills.find(p => p.name === parentName)) {
+        skillEdges.push(['s:' + parentName, 's:' + s.name]);
+      }
+    });
+  });
+
+  const allEdges = [...workerEdges, ...skillEdges];
+  const pos = useForceGraph(nodes, allEdges, W, H);
+
+  // helper: shorten line by `r` px at the target end for arrow clearance
+  function shortenLine(ax, ay, bx, by, r) {
+    const dx = bx - ax, dy = by - ay;
+    const len = Math.sqrt(dx * dx + dy * dy) || 1;
+    return { x2: bx - (dx / len) * r, y2: by - (dy / len) * r };
+  }
 
   return (
     <div style={{ background: '#0a0f1a', borderRadius: '10px', overflow: 'hidden', marginBottom: '1.5rem', position: 'relative' }}>
+      {onRefresh && (
+        <button onClick={onRefresh} style={{
+          position: 'absolute', top: 10, right: 12, zIndex: 2,
+          background: 'none', border: '1px solid #1e3a5f', borderRadius: '4px',
+          color: '#334155', fontSize: '0.75rem', cursor: 'pointer', padding: '2px 7px',
+        }}>↺</button>
+      )}
       <svg width="100%" viewBox={`0 0 ${W} ${H}`} style={{ display: 'block' }}>
         <defs>
           {Object.entries(CREATOR_COLOR).map(([k, v]) => (
@@ -448,18 +474,42 @@ function SkillGraph({ workers, skills }) {
               <stop offset="100%" stopColor={v.stroke} stopOpacity="0.3" />
             </radialGradient>
           ))}
+          {/* Arrow marker for dependency edges */}
+          <marker id="arrow" markerWidth="6" markerHeight="6" refX="5" refY="3" orient="auto">
+            <path d="M0,0 L0,6 L6,3 z" fill="#2d4a6a" />
+          </marker>
+          <marker id="arrow-hov" markerWidth="6" markerHeight="6" refX="5" refY="3" orient="auto">
+            <path d="M0,0 L0,6 L6,3 z" fill="#f59e0b" />
+          </marker>
         </defs>
 
-        {/* Edges */}
-        {edges.map(([a, b], i) => {
+        {/* Worker→skill edges (dashed) */}
+        {workerEdges.map(([a, b], i) => {
           if (!pos[a] || !pos[b]) return null;
           const isHov = hovered === a || hovered === b;
           return (
-            <line key={i}
+            <line key={'we' + i}
               x1={pos[a].x} y1={pos[a].y} x2={pos[b].x} y2={pos[b].y}
               stroke={isHov ? '#f59e0b' : '#1e3a5f'}
-              strokeWidth={isHov ? 1.5 : 0.8}
-              strokeOpacity={isHov ? 0.9 : 0.4}
+              strokeWidth={isHov ? 1.2 : 0.7}
+              strokeOpacity={isHov ? 0.7 : 0.3}
+              strokeDasharray="3 3"
+            />
+          );
+        })}
+
+        {/* Skill→skill dependency edges (solid + arrow) */}
+        {skillEdges.map(([a, b], i) => {
+          if (!pos[a] || !pos[b]) return null;
+          const isHov = hovered === a || hovered === b;
+          const { x2, y2 } = shortenLine(pos[a].x, pos[a].y, pos[b].x, pos[b].y, 24);
+          return (
+            <line key={'se' + i}
+              x1={pos[a].x} y1={pos[a].y} x2={x2} y2={y2}
+              stroke={isHov ? '#f59e0b' : '#2d4a6a'}
+              strokeWidth={isHov ? 1.8 : 1.1}
+              strokeOpacity={isHov ? 1 : 0.6}
+              markerEnd={isHov ? 'url(#arrow-hov)' : 'url(#arrow)'}
             />
           );
         })}
@@ -469,21 +519,31 @@ function SkillGraph({ workers, skills }) {
           if (!pos[n.id]) return null;
           const c = CREATOR_COLOR[n.data.creator] || CREATOR_COLOR.other;
           const isHov = hovered === n.id;
-          const r = isHov ? 28 : 22;
+          const r = isHov ? 30 : 24;
+          const hasParents = (n.data.parents || []).length > 0;
           return (
             <g key={n.id} transform={`translate(${pos[n.id].x},${pos[n.id].y})`}
               onMouseEnter={() => setHovered(n.id)} onMouseLeave={() => setHovered(null)}
               style={{ cursor: 'default' }}>
-              <circle r={r} fill={`url(#grad-${n.data.creator || 'other'})`} stroke={c.stroke} strokeWidth={isHov ? 2 : 1} />
-              <text textAnchor="middle" dy="0.35em" fill={c.text} fontSize={isHov ? 9 : 8}
+              <circle r={r} fill={`url(#grad-${n.data.creator || 'other'})`}
+                stroke={c.stroke} strokeWidth={isHov ? 2.5 : hasParents ? 1.5 : 1} />
+              <text textAnchor="middle" dy="0.35em" fill={c.text} fontSize={isHov ? 9.5 : 8.5}
                 style={{ pointerEvents: 'none', userSelect: 'none' }}>
                 {n.label.length > 12 ? n.label.slice(0, 11) + '…' : n.label}
               </text>
               {isHov && (
-                <text y={r + 12} textAnchor="middle" fill="#94a3b8" fontSize={8}
-                  style={{ pointerEvents: 'none' }}>
-                  {n.data.desc?.slice(0, 40)}
-                </text>
+                <>
+                  <text y={r + 13} textAnchor="middle" fill="#94a3b8" fontSize={8.5}
+                    style={{ pointerEvents: 'none' }}>
+                    {n.data.desc?.slice(0, 45)}
+                  </text>
+                  {(n.data.parents || []).length > 0 && (
+                    <text y={r + 24} textAnchor="middle" fill="#475569" fontSize={7.5}
+                      style={{ pointerEvents: 'none' }}>
+                      needs: {n.data.parents.join(', ')}
+                    </text>
+                  )}
+                </>
               )}
             </g>
           );
@@ -493,7 +553,7 @@ function SkillGraph({ workers, skills }) {
         {nodes.filter(n => n.type === 'worker').map(n => {
           if (!pos[n.id]) return null;
           const isHov = hovered === n.id;
-          const sz = isHov ? 36 : 28;
+          const sz = isHov ? 38 : 30;
           return (
             <g key={n.id} transform={`translate(${pos[n.id].x},${pos[n.id].y})`}
               onMouseEnter={() => setHovered(n.id)} onMouseLeave={() => setHovered(null)}
@@ -510,7 +570,11 @@ function SkillGraph({ workers, skills }) {
       </svg>
 
       {/* Legend */}
-      <div style={{ position: 'absolute', bottom: 12, right: 16, display: 'flex', gap: '1rem', fontSize: '0.68rem' }}>
+      <div style={{ position: 'absolute', bottom: 10, left: 14, display: 'flex', gap: '1.25rem', fontSize: '0.65rem', color: '#334155' }}>
+        <span>─ ─ worker uses</span>
+        <span style={{ color: '#2d4a6a' }}>→ depends on</span>
+      </div>
+      <div style={{ position: 'absolute', bottom: 10, right: 16, display: 'flex', gap: '1rem', fontSize: '0.65rem' }}>
         {Object.entries(CREATOR_COLOR).map(([k, v]) => (
           <span key={k} style={{ color: v.text }}>● {k}</span>
         ))}
@@ -604,7 +668,7 @@ function SkillsTab({ workers }) {
 
       {loading && <div style={{ color: '#475569' }}>Loading...</div>}
 
-      {!loading && <SkillGraph workers={workers} skills={skills} />}
+      {!loading && <SkillGraph workers={workers} skills={skills} onRefresh={load} />}
 
       {!loading && Object.entries(byCreator).filter(([, arr]) => arr.length > 0).map(([creator, arr]) => {
         const st = creatorStyle(creator);
