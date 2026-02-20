@@ -1,19 +1,76 @@
 'use client';
 import { useState, useEffect, useRef, useCallback } from 'react';
 
+// ── Design tokens (Habit Sequence × H-Worker merge) ──────────────────────────
+const T = {
+  bg:      '#F4F4F4',
+  card:    '#FFFFFF',
+  text:    '#0D0D0D',
+  muted:   '#888888',
+  faint:   'rgba(0,0,0,0.12)',
+  border:  '1px solid rgba(0,0,0,0.06)',
+  shadow:  '0 4px 20px rgba(0,0,0,0.05)',
+  radius:  '2px',
+  mono:    "'JetBrains Mono', monospace",
+  ui:      "'Space Grotesk', sans-serif",
+  // accent palette
+  mint:    '#6CEFA0',
+  blue:    '#6CDDEF',
+  purple:  '#B06CEF',
+  orange:  '#EF9B6C',
+  red:     '#EF4444',
+};
+
 const S = {
-  page: { fontFamily: 'monospace', background: '#0f172a', color: '#e2e8f0', minHeight: '100vh', padding: '1.5rem' },
-  header: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.5rem', borderBottom: '1px solid #1e293b', paddingBottom: '1rem' },
-  title: { color: '#38bdf8', margin: 0, fontSize: '1.25rem', letterSpacing: '0.05em' },
-  tabs: { display: 'flex', gap: '0.5rem', marginBottom: '1.5rem' },
-  tab: (active) => ({ background: active ? '#0284c7' : '#1e293b', color: active ? '#fff' : '#94a3b8', border: 'none', borderRadius: '6px', padding: '0.4rem 1rem', cursor: 'pointer', fontSize: '0.85rem' }),
+  page: {
+    fontFamily: T.ui, background: T.bg, color: T.text, minHeight: '100vh', padding: '1.5rem',
+  },
+  header: {
+    display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+    marginBottom: '1.5rem', borderBottom: T.border, paddingBottom: '1rem',
+  },
+  tabs: { display: 'flex', gap: '0.4rem', marginBottom: '1.5rem' },
+  tab: (active) => ({
+    background: active ? T.text : T.card,
+    color: active ? '#fff' : T.muted,
+    border: `1px solid ${active ? T.text : 'rgba(0,0,0,0.09)'}`,
+    borderRadius: T.radius, padding: '0.38rem 1rem', cursor: 'pointer',
+    fontSize: '0.7rem', fontFamily: T.mono, textTransform: 'uppercase', letterSpacing: '0.08em',
+  }),
   section: { marginBottom: '2rem' },
-  sectionTitle: { color: '#64748b', fontSize: '0.75rem', textTransform: 'uppercase', letterSpacing: '0.1em', marginBottom: '0.75rem' },
-  card: { background: '#1e293b', borderRadius: '8px', padding: '1rem' },
-  badge: (color) => ({ background: color, color: '#000', borderRadius: '4px', padding: '2px 7px', fontSize: '0.7rem', fontWeight: 'bold' }),
-  input: { background: '#1e293b', border: '1px solid #334155', borderRadius: '6px', padding: '0.5rem 1rem', color: '#e2e8f0', fontFamily: 'monospace', flex: 1 },
-  btn: { background: '#0284c7', color: '#fff', border: 'none', borderRadius: '6px', padding: '0.5rem 1.25rem', cursor: 'pointer' },
-  code: { background: '#0f172a', borderRadius: '6px', padding: '1rem', fontSize: '0.8rem', overflowX: 'auto', whiteSpace: 'pre-wrap', maxHeight: '400px', overflowY: 'auto' },
+  sectionTitle: {
+    color: T.muted, fontSize: '0.62rem', fontFamily: T.mono,
+    textTransform: 'uppercase', letterSpacing: '0.12em', marginBottom: '0.75rem',
+  },
+  card: {
+    background: T.card, borderRadius: T.radius, padding: '1rem',
+    boxShadow: T.shadow, border: T.border,
+  },
+  badge: (color) => ({
+    background: color, color: '#0D0D0D', borderRadius: T.radius,
+    padding: '2px 7px', fontSize: '0.62rem', fontFamily: T.mono,
+    fontWeight: '600', textTransform: 'uppercase', letterSpacing: '0.04em',
+  }),
+  input: {
+    background: 'transparent', border: 'none', borderBottom: '1px solid #E0E0E0',
+    borderRadius: 0, padding: '0.5rem 0', color: T.text,
+    fontFamily: T.mono, flex: 1, outline: 'none', fontSize: '0.85rem',
+  },
+  btn: {
+    background: T.text, color: '#fff', border: 'none', borderRadius: T.radius,
+    padding: '0.5rem 1.25rem', cursor: 'pointer',
+    fontFamily: T.mono, fontSize: '0.7rem', textTransform: 'uppercase', letterSpacing: '0.06em',
+  },
+  btnGhost: {
+    background: T.card, color: T.muted, border: '1px solid rgba(0,0,0,0.1)',
+    borderRadius: T.radius, padding: '0.38rem 0.75rem', cursor: 'pointer',
+    fontFamily: T.mono, fontSize: '0.7rem', textTransform: 'uppercase', letterSpacing: '0.06em',
+  },
+  code: {
+    background: T.bg, borderRadius: T.radius, padding: '1rem', fontSize: '0.8rem',
+    overflowX: 'auto', whiteSpace: 'pre-wrap', maxHeight: '400px', overflowY: 'auto',
+    fontFamily: T.mono, color: T.text, border: T.border,
+  },
 };
 
 function statusLabel(w) {
@@ -24,14 +81,36 @@ function statusLabel(w) {
 }
 function statusColor(w) {
   const s = statusLabel(w);
-  if (s === 'idle') return '#22c55e';
-  if (s === 'working') return '#f59e0b';
-  if (s === 'failed') return '#ef4444';
-  if (s === 'offline') return '#475569';
-  return '#38bdf8';
+  if (s === 'idle')    return T.mint;
+  if (s === 'working') return T.orange;
+  if (s === 'failed')  return T.red;
+  if (s === 'offline') return '#E0E0E0';
+  return T.blue;
 }
 
-// --- Draggable Desktop Window ---
+// ── Logo SVG (HUMANS wordmark) ────────────────────────────────────────────────
+function Logo() {
+  return (
+    <svg width="126" height="19" viewBox="0 0 189 28" xmlns="http://www.w3.org/2000/svg">
+      <g transform="translate(-894,-15845)" fill={T.text}>
+        <g transform="translate(894,15845)">
+          <polygon points="11.4 6 14 9 3.6 21 1 18"/>
+          <path fillRule="nonzero" d="M11.2845224,23.9921389 L11.2845224,28 L3.71547756,28 L3.71547756,23.9921389 L11.2845224,23.9921389 Z M3.71547756,23.9921389 C1.67911005,23.9921389 0,22.0931749 0,19.7401109 L3.55271368e-15,4.03466956 L3.71547756,4.03466956 L3.71547756,23.9921389 Z M15,23.9921389 L11.2845224,23.9921389 L11.2845224,4.03466956 C13.3208899,4.03466956 15,5.94633562 15,8.31513923 L15,23.9921389 Z M11.2845224,0 L11.2845224,4.03466956 L3.71547756,4.03466956 L3.71547756,0 L11.2845224,0 Z"/>
+          <g transform="translate(20,0)" fillRule="nonzero">
+            <polygon points="17.0634584 12.0228245 4.26586459 12.0228245 4.26586459 0.0399429387 0 0.0399429387 0 28 4.26586459 28 4.26586459 16.0171184 17.0634584 16.0171184 17.0634584 28 21.329323 28 21.329323 0.0399429387 17.0634584 0.0399429387"/>
+            <path d="M42.7782496,0.0399429387 L42.7782496,24.0057061 L30.3793347,24.0057061 L30.3793347,0.0399429387 L26.1134702,0.0399429387 L26.1134702,24.0057061 C26.1134702,26.2025678 27.9075254,28 30.1401274,28 L43.0573248,28 C45.250059,28 47.0441142,26.2025678 47.0441142,24.0057061 L47.0441142,0.0399429387 L42.7782496,0.0399429387 Z"/>
+            <path d="M75.50979,0.0399429387 C73.1177164,0.0399429387 71.2439255,1.95720399 71.2439255,4.31383738 L71.2439255,24.0057061 L66.2205709,24.0057061 L66.2205709,4.31383738 C66.2205709,1.95720399 64.306912,0.0399429387 61.9547063,0.0399429387 L56.2934654,0.0399429387 C53.9412597,0.0399429387 52.0276008,1.95720399 52.0276008,4.31383738 L52.0276008,28 L56.2934654,28 L56.2934654,4.0342368 L61.9547063,4.0342368 L61.9547063,23.7261056 C61.9547063,26.0827389 63.8284973,28 66.2205709,28 L71.2439255,28 C73.5961312,28 75.50979,26.0827389 75.50979,23.7261056 L75.50979,4.0342368 L81.5697098,4.0342368 L81.5697098,0.0399429387 L75.50979,0.0399429387 Z M81.5697098,28 L85.8355744,28 L85.8355744,4.0342368 L81.5697098,4.0342368 L81.5697098,28 Z"/>
+            <path d="M108.281198,14.0199715 L95.4836046,14.0199715 L95.4836046,4.0342368 L108.281198,4.0342368 L108.281198,0.0399429387 L95.4836046,0.0399429387 C93.1313989,0.0399429387 91.21774,1.95720399 91.21774,4.31383738 L91.21774,28 L95.4836046,28 L95.4836046,18.0142653 L108.281198,18.0142653 L108.281198,28 L112.547063,28 L112.547063,4.0342368 L108.281198,4.0342368 L108.281198,14.0199715 Z"/>
+            <path d="M138.620665,24.0057061 L132.241802,24.0057061 L132.241802,28 L138.620665,28 L138.620665,27.9600571 C140.972871,27.9600571 142.88653,26.042796 142.88653,23.6861626 L142.88653,0 L138.620665,0 L138.620665,24.0057061 Z M132.241802,4.27389444 C132.241802,1.87731812 130.328143,0.0399429387 127.975938,0.0399429387 L121.597075,0.0399429387 C119.244869,0.0399429387 117.33121,1.87731812 117.33121,4.27389444 L117.33121,28 L121.597075,28 L121.597075,3.99429387 L127.975938,3.99429387 L127.975938,23.9657632 L132.241802,23.9657632 L132.241802,4.27389444 Z"/>
+            <path d="M168.202642,0.0399429387 L151.936542,0.0399429387 C149.584336,0.0399429387 147.670677,1.95720399 147.670677,4.31383738 L147.670677,12.0228245 L151.936542,12.0228245 L151.936542,4.07417974 L168.202642,4.07417974 L168.202642,0.0399429387 Z M151.936542,12.0228245 L151.936542,16.0570613 L164.734135,16.0570613 L164.734135,24.0456491 L148.468035,24.0456491 L148.468035,28 L164.734135,28 C167.086341,28 169,26.0827389 169,23.7261056 L169,16.0570613 C169,13.8202568 167.205945,12.0228245 164.973343,12.0228245 L151.936542,12.0228245 Z"/>
+          </g>
+        </g>
+      </g>
+    </svg>
+  );
+}
+
+// ── Draggable Desktop Window (stays dark — it's a screen) ────────────────────
 function DesktopWindow({ worker, onClose }) {
   const [pos, setPos] = useState({ x: Math.random() * 200 + 80, y: Math.random() * 100 + 80 });
   const [dragging, setDragging] = useState(false);
@@ -41,10 +120,7 @@ function DesktopWindow({ worker, onClose }) {
 
   useEffect(() => {
     const t = setInterval(() => {
-      if (document.visibilityState === 'visible') {
-        setImgTs(Date.now());
-        setImgError(false);
-      }
+      if (document.visibilityState === 'visible') { setImgTs(Date.now()); setImgError(false); }
     }, 4000);
     return () => clearInterval(t);
   }, []);
@@ -58,63 +134,55 @@ function DesktopWindow({ worker, onClose }) {
     return () => { window.removeEventListener('mousemove', onMove); window.removeEventListener('mouseup', onUp); };
   }, [dragging, dragOffset]);
 
-  const onDragStart = (e) => {
-    setDragging(true);
-    setDragOffset({ x: e.clientX - pos.x, y: e.clientY - pos.y });
-    e.preventDefault();
-  };
+  const onDragStart = (e) => { setDragging(true); setDragOffset({ x: e.clientX - pos.x, y: e.clientY - pos.y }); e.preventDefault(); };
 
   return (
     <div style={{
       position: 'fixed', left: pos.x, top: pos.y, zIndex: 1000, width: 660,
-      background: '#0f172a', border: '1px solid #334155', borderRadius: '10px',
-      boxShadow: '0 20px 80px rgba(0,0,0,0.85)', userSelect: 'none',
+      background: '#0f172a', border: '1px solid #1e293b', borderRadius: '4px',
+      boxShadow: '0 24px 80px rgba(0,0,0,0.4)', userSelect: 'none',
     }}>
-      {/* Title bar */}
       <div onMouseDown={onDragStart} style={{
         display: 'flex', justifyContent: 'space-between', alignItems: 'center',
         padding: '0.5rem 0.75rem', borderBottom: '1px solid #1e293b',
         cursor: dragging ? 'grabbing' : 'grab',
-        background: '#1e293b', borderRadius: '10px 10px 0 0',
+        background: '#1e293b', borderRadius: '4px 4px 0 0',
       }}>
-        <span style={{ color: '#38bdf8', fontSize: '0.82rem' }}>⊞ {worker.id} · {worker.ip}</span>
+        <span style={{ color: '#94a3b8', fontSize: '0.75rem', fontFamily: T.mono }}>
+          ⊞ {worker.id} · {worker.ip}
+        </span>
         <div style={{ display: 'flex', gap: '0.75rem', alignItems: 'center' }}>
           <a href={`http://${worker.ip}:6080`} target="_blank" rel="noreferrer"
             onMouseDown={e => e.stopPropagation()}
-            style={{ color: '#94a3b8', fontSize: '0.75rem', textDecoration: 'none' }}>
+            style={{ color: '#475569', fontSize: '0.72rem', textDecoration: 'none', fontFamily: T.mono }}>
             ↗ fullscreen
           </a>
           <button onMouseDown={e => e.stopPropagation()} onClick={onClose}
-            style={{ background: 'none', border: 'none', color: '#64748b', cursor: 'pointer', fontSize: '1.1rem', lineHeight: 1, padding: '0 2px' }}>
+            style={{ background: 'none', border: 'none', color: '#475569', cursor: 'pointer', fontSize: '1.1rem', lineHeight: 1, padding: '0 2px' }}>
             ×
           </button>
         </div>
       </div>
-      {/* Screenshot */}
-      <div style={{ background: '#000', borderRadius: '0 0 10px 10px', position: 'relative', height: 412, overflow: 'hidden' }}>
+      <div style={{ background: '#000', borderRadius: '0 0 4px 4px', position: 'relative', height: 412, overflow: 'hidden' }}>
         {imgError ? (
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%', color: '#334155', flexDirection: 'column', gap: '0.5rem' }}>
             <div style={{ fontSize: '2rem' }}>⊘</div>
-            <div style={{ fontSize: '0.8rem' }}>Screenshot unavailable</div>
+            <div style={{ fontSize: '0.75rem', fontFamily: T.mono }}>unavailable</div>
           </div>
         ) : (
-          <img
-            key={imgTs}
-            src={`/api/screenshot?ip=${worker.ip}&t=${imgTs}`}
-            alt="desktop"
+          <img key={imgTs} src={`/api/screenshot?ip=${worker.ip}&t=${imgTs}`} alt="desktop"
             onError={() => setImgError(true)}
-            style={{ width: '100%', height: '100%', objectFit: 'contain', display: 'block' }}
-          />
+            style={{ width: '100%', height: '100%', objectFit: 'contain', display: 'block' }} />
         )}
-        <div style={{ position: 'absolute', bottom: 6, right: 10, color: '#1e293b', fontSize: '0.65rem' }}>
-          live · 4s refresh
+        <div style={{ position: 'absolute', bottom: 6, right: 10, color: '#1e293b', fontSize: '0.62rem', fontFamily: T.mono }}>
+          live · 4s
         </div>
       </div>
     </div>
   );
 }
 
-// --- Workers Tab ---
+// ── Workers Tab ───────────────────────────────────────────────────────────────
 function WorkersTab({ workers }) {
   const [tasks, setTasks] = useState([]);
   const [newTask, setNewTask] = useState('');
@@ -136,13 +204,8 @@ function WorkersTab({ workers }) {
   function openDesktop(worker) {
     setOpenDesktops(prev => prev.find(w => w.id === worker.id) ? prev : [...prev, worker]);
   }
-  function closeDesktop(id) {
-    setOpenDesktops(prev => prev.filter(w => w.id !== id));
-  }
-  function handleCardEnter(workerId) {
-    setHover(workerId);
-    setHoverTs(prev => ({ ...prev, [workerId]: Date.now() }));
-  }
+  function closeDesktop(id) { setOpenDesktops(prev => prev.filter(w => w.id !== id)); }
+  function handleCardEnter(workerId) { setHover(workerId); setHoverTs(prev => ({ ...prev, [workerId]: Date.now() })); }
 
   async function addTask() {
     if (!newTask.trim()) return;
@@ -152,10 +215,7 @@ function WorkersTab({ workers }) {
 
   return (
     <div>
-      {/* Draggable desktop windows */}
-      {openDesktops.map(w => (
-        <DesktopWindow key={w.id} worker={w} onClose={() => closeDesktop(w.id)} />
-      ))}
+      {openDesktops.map(w => <DesktopWindow key={w.id} worker={w} onClose={() => closeDesktop(w.id)} />)}
 
       <div style={S.section}>
         <div style={S.sectionTitle}>Workers ({workers.length}/4) · {ts}</div>
@@ -166,70 +226,65 @@ function WorkersTab({ workers }) {
             const screenshotTs = hoverTs[w.id] || 0;
             return (
               <div key={w.id}
-                style={{ ...S.card, border: `1px solid ${color}44`, position: 'relative' }}
+                style={{ ...S.card, borderLeft: `3px solid ${color}`, position: 'relative' }}
                 onMouseEnter={() => handleCardEnter(w.id)}
                 onMouseLeave={() => setHover(null)}>
 
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                  <strong style={{ color: '#f1f5f9' }}>{w.id}</strong>
+                  <strong style={{ color: T.text, fontFamily: T.mono, fontSize: '0.82rem' }}>{w.id}</strong>
                   <span style={S.badge(color)}>{statusLabel(w)}</span>
                 </div>
-                <div style={{ color: '#64748b', fontSize: '0.78rem', marginTop: '0.5rem' }}>
-                  <div>IP: {w.ip}</div>
-                  <div>Task: <span style={{ color: w.task && w.task !== 'idle' ? '#fbbf24' : '#475569' }}>{w.task || 'idle'}</span></div>
-                  <div style={{ color: '#334155' }}>Heartbeat: {w.updated_at?.slice(11,19)} UTC</div>
+                <div style={{ color: T.muted, fontSize: '0.75rem', marginTop: '0.5rem', fontFamily: T.mono, lineHeight: 1.7 }}>
+                  <div>{w.ip}</div>
+                  <div style={{ color: (w.task && w.task !== 'idle') ? T.orange : 'rgba(0,0,0,0.25)' }}>
+                    {w.task || 'idle'}
+                  </div>
+                  <div style={{ color: 'rgba(0,0,0,0.2)', fontSize: '0.68rem' }}>{w.updated_at?.slice(11,19)} utc</div>
                 </div>
 
-                {/* Screenshot preview — shown on card hover, inside the card so no escape issue */}
+                {/* Screenshot preview */}
                 <div style={{
-                  marginTop: '0.75rem', overflow: 'hidden', borderRadius: '4px',
+                  marginTop: '0.75rem', overflow: 'hidden', borderRadius: T.radius,
                   height: isHovered ? 160 : 0, transition: 'height 0.15s ease',
-                  background: '#0f172a',
+                  background: T.bg, border: isHovered ? T.border : 'none',
                 }}>
                   {screenshotTs > 0 && (
-                    <img
-                      src={`/api/screenshot?ip=${w.ip}&t=${screenshotTs}`}
-                      alt="desktop preview"
+                    <img src={`/api/screenshot?ip=${w.ip}&t=${screenshotTs}`} alt="preview"
                       style={{ width: '100%', height: '160px', objectFit: 'cover', display: 'block' }}
-                      onError={e => { e.target.style.opacity = '0.2'; }}
-                    />
+                      onError={e => { e.target.style.opacity = '0.1'; }} />
                   )}
                 </div>
 
                 {/* Skills */}
                 {w.skills?.length > 0 && (
-                  <div style={{ marginTop: '0.75rem', borderTop: '1px solid #0f172a', paddingTop: '0.6rem' }}>
-                    <div style={{ color: '#334155', fontSize: '0.65rem', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: '0.4rem' }}>Skills</div>
+                  <div style={{ marginTop: '0.75rem', borderTop: T.border, paddingTop: '0.6rem' }}>
+                    <div style={{ color: 'rgba(0,0,0,0.2)', fontSize: '0.58rem', fontFamily: T.mono, textTransform: 'uppercase', letterSpacing: '0.1em', marginBottom: '0.4rem' }}>skills</div>
                     <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.3rem' }}>
                       {w.skills.map(sk => (
                         <span key={sk.name} title={sk.desc} style={{
-                          fontSize: '0.68rem', padding: '2px 6px', borderRadius: '4px',
-                          background: sk.creator === 'claude' ? '#312e81' : '#0c4a6e',
-                          color: sk.creator === 'claude' ? '#a5b4fc' : '#7dd3fc',
-                          border: `1px solid ${sk.creator === 'claude' ? '#4338ca44' : '#0284c744'}`,
-                          cursor: 'default',
+                          fontSize: '0.64rem', padding: '2px 6px', borderRadius: T.radius,
+                          fontFamily: T.mono,
+                          background: sk.creator === 'claude' ? '#EDE9FE' : '#E0F2FE',
+                          color: sk.creator === 'claude' ? '#5B21B6' : '#0369A1',
+                          border: `1px solid ${sk.creator === 'claude' ? '#7C3AED22' : '#0284C722'}`,
                         }}>
                           {sk.creator === 'claude' ? '◆' : '⬡'} {sk.name}
                         </span>
                       ))}
                     </div>
-                    <div style={{ display: 'flex', gap: '0.75rem', marginTop: '0.35rem', fontSize: '0.62rem', color: '#334155' }}>
-                      <span><span style={{ color: '#4338ca' }}>◆</span> claude ({w.skills.filter(s => s.creator === 'claude').length})</span>
-                      <span><span style={{ color: '#0284c7' }}>⬡</span> openclaw ({w.skills.filter(s => s.creator === 'openclaw').length})</span>
+                    <div style={{ display: 'flex', gap: '0.75rem', marginTop: '0.35rem', fontSize: '0.6rem', fontFamily: T.mono, color: 'rgba(0,0,0,0.25)' }}>
+                      <span><span style={{ color: '#7C3AED' }}>◆</span> claude ({w.skills.filter(s => s.creator === 'claude').length})</span>
+                      <span><span style={{ color: '#0284C7' }}>⬡</span> openclaw ({w.skills.filter(s => s.creator === 'openclaw').length})</span>
                     </div>
                   </div>
                 )}
 
                 <div style={{ marginTop: '0.75rem', display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
-                  <button
-                    onClick={() => openDesktop(w)}
-                    style={{ color: '#38bdf8', fontSize: '0.8rem', background: '#0f172a', padding: '4px 10px', borderRadius: '4px', border: '1px solid #38bdf833', cursor: 'pointer' }}>
-                    Desktop ⊞
-                  </button>
+                  <button onClick={() => openDesktop(w)} style={{
+                    ...S.btnGhost, fontSize: '0.7rem', padding: '3px 10px',
+                  }}>Desktop ⊞</button>
                   <a href={`http://${w.ip}:6080`} target="_blank" rel="noreferrer"
-                    style={{ color: '#475569', fontSize: '0.75rem', textDecoration: 'none' }}>
-                    ↗
-                  </a>
+                    style={{ color: T.muted, fontSize: '0.75rem', textDecoration: 'none' }}>↗</a>
                 </div>
               </div>
             );
@@ -239,42 +294,48 @@ function WorkersTab({ workers }) {
 
       <div style={S.section}>
         <div style={S.sectionTitle}>Assign Task</div>
-        <div style={{ display: 'flex', gap: '0.5rem' }}>
+        <div style={{ display: 'flex', gap: '0.75rem', alignItems: 'flex-end', ...S.card }}>
           <input style={S.input} value={newTask} onChange={e => setNewTask(e.target.value)}
-            onKeyDown={e => e.key === 'Enter' && addTask()} placeholder="Task description..." />
-          <button style={S.btn} onClick={addTask}>Assign</button>
+            onKeyDown={e => e.key === 'Enter' && addTask()} placeholder="task description..." />
+          <button style={{ ...S.btn, flexShrink: 0 }} onClick={addTask}>Assign</button>
         </div>
       </div>
 
       <div style={S.section}>
         <div style={S.sectionTitle}>Task Log ({tasks.length})</div>
-        <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.82rem' }}>
-          <thead>
-            <tr style={{ color: '#475569', textAlign: 'left' }}>
-              {['ID','Description','Status','Worker','Time'].map(h => <th key={h} style={{ padding: '0.4rem', borderBottom: '1px solid #1e293b' }}>{h}</th>)}
-            </tr>
-          </thead>
-          <tbody>
-            {tasks.slice(0,50).map(t => (
-              <tr key={t.id} style={{ borderBottom: '1px solid #1e293b22' }}>
-                <td style={{ padding: '0.4rem', color: '#334155' }}>{t.id.slice(-6)}</td>
-                <td style={{ padding: '0.4rem' }}>{t.description}</td>
-                <td style={{ padding: '0.4rem' }}>
-                  <span style={{ color: t.status==='done'?'#22c55e':t.status==='assigned'?'#fbbf24':'#64748b' }}>{t.status}</span>
-                </td>
-                <td style={{ padding: '0.4rem', color: '#64748b' }}>{t.worker||'—'}</td>
-                <td style={{ padding: '0.4rem', color: '#334155' }}>{t.created_at?.slice(11,19)}</td>
+        <div style={{ ...S.card, padding: 0, overflow: 'hidden' }}>
+          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.78rem', fontFamily: T.mono }}>
+            <thead>
+              <tr style={{ color: T.muted, textAlign: 'left', borderBottom: T.border }}>
+                {['ID','Description','Status','Worker','Time'].map(h => (
+                  <th key={h} style={{ padding: '0.6rem 0.75rem', fontWeight: 500, fontSize: '0.6rem', textTransform: 'uppercase', letterSpacing: '0.08em' }}>{h}</th>
+                ))}
               </tr>
-            ))}
-          </tbody>
-        </table>
-        {!tasks.length && <div style={{ color: '#334155', marginTop: '0.5rem' }}>No tasks yet.</div>}
+            </thead>
+            <tbody>
+              {tasks.slice(0,50).map(t => (
+                <tr key={t.id} style={{ borderBottom: T.border }}>
+                  <td style={{ padding: '0.45rem 0.75rem', color: 'rgba(0,0,0,0.25)' }}>{t.id.slice(-6)}</td>
+                  <td style={{ padding: '0.45rem 0.75rem' }}>{t.description}</td>
+                  <td style={{ padding: '0.45rem 0.75rem' }}>
+                    <span style={{ color: t.status==='done' ? T.mint : t.status==='assigned' ? T.orange : T.muted }}>
+                      {t.status}
+                    </span>
+                  </td>
+                  <td style={{ padding: '0.45rem 0.75rem', color: T.muted }}>{t.worker||'—'}</td>
+                  <td style={{ padding: '0.45rem 0.75rem', color: 'rgba(0,0,0,0.3)' }}>{t.created_at?.slice(11,19)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          {!tasks.length && <div style={{ color: 'rgba(0,0,0,0.2)', padding: '1rem 0.75rem', fontFamily: T.mono, fontSize: '0.78rem' }}>No tasks yet.</div>}
+        </div>
       </div>
     </div>
   );
 }
 
-// --- NFS Tab ---
+// ── NFS Tab ───────────────────────────────────────────────────────────────────
 function NFSTab() {
   const [path, setPath] = useState('');
   const [data, setData] = useState(null);
@@ -284,45 +345,43 @@ function NFSTab() {
     setLoading(true);
     const r = await fetch(`/api/nfs?path=${encodeURIComponent(p)}`);
     const d = await r.json();
-    setData(d); setPath(p);
-    setLoading(false);
+    setData(d); setPath(p); setLoading(false);
   }
 
   useEffect(() => { load(''); }, []);
-
   const parts = path.split('/').filter(Boolean);
 
   return (
     <div>
-      <div style={{ marginBottom: '1rem', fontSize: '0.85rem', color: '#64748b' }}>
-        <span style={{ cursor: 'pointer', color: '#38bdf8' }} onClick={() => load('')}>/mnt/shared</span>
+      <div style={{ marginBottom: '1rem', fontSize: '0.78rem', fontFamily: T.mono, color: T.muted }}>
+        <span style={{ cursor: 'pointer', color: T.text }} onClick={() => load('')}>/mnt/shared</span>
         {parts.map((p, i) => (
           <span key={i}>
-            <span style={{ margin: '0 0.3rem' }}>/</span>
-            <span style={{ cursor: 'pointer', color: '#38bdf8' }} onClick={() => load(parts.slice(0,i+1).join('/'))}>{p}</span>
+            <span style={{ margin: '0 0.25rem', color: 'rgba(0,0,0,0.2)' }}>/</span>
+            <span style={{ cursor: 'pointer', color: T.text }} onClick={() => load(parts.slice(0,i+1).join('/'))}>{p}</span>
           </span>
         ))}
       </div>
 
-      {loading && <div style={{ color: '#475569' }}>Loading...</div>}
-      {data?.error && <div style={{ color: '#ef4444' }}>Error: {data.error}</div>}
+      {loading && <div style={{ color: T.muted, fontFamily: T.mono, fontSize: '0.78rem' }}>loading...</div>}
+      {data?.error && <div style={{ color: T.red, fontFamily: T.mono, fontSize: '0.78rem' }}>Error: {data.error}</div>}
 
       {data?.type === 'dir' && (
-        <div style={S.card}>
+        <div style={{ ...S.card, padding: 0, overflow: 'hidden' }}>
           {path && (
-            <div style={{ padding: '0.4rem 0.5rem', cursor: 'pointer', color: '#64748b', borderBottom: '1px solid #0f172a' }}
+            <div style={{ padding: '0.45rem 0.75rem', cursor: 'pointer', color: T.muted, borderBottom: T.border, fontFamily: T.mono, fontSize: '0.78rem' }}
               onClick={() => load(parts.slice(0,-1).join('/'))}>📁 ..</div>
           )}
-          {!data.entries?.length && <div style={{ color: '#334155', padding: '0.5rem' }}>Empty directory</div>}
+          {!data.entries?.length && <div style={{ color: 'rgba(0,0,0,0.25)', padding: '0.75rem', fontFamily: T.mono, fontSize: '0.78rem' }}>Empty directory</div>}
           {data.entries?.map(e => (
-            <div key={e.name} style={{ padding: '0.4rem 0.5rem', cursor: 'pointer', borderBottom: '1px solid #0f172a', display: 'flex', gap: '0.5rem', alignItems: 'center' }}
+            <div key={e.name} style={{ padding: '0.45rem 0.75rem', cursor: 'pointer', borderBottom: T.border, display: 'flex', gap: '0.5rem', alignItems: 'center', transition: 'background 0.1s' }}
               onClick={() => load(path ? `${path}/${e.name}` : e.name)}
-              onMouseEnter={ev => ev.currentTarget.style.background='#0f172a'}
-              onMouseLeave={ev => ev.currentTarget.style.background=''}>
-              <span>{e.type === 'dir' ? '📁' : '📄'}</span>
-              <span style={{ color: e.type === 'dir' ? '#38bdf8' : '#e2e8f0' }}>{e.name}</span>
-              {e.type === 'file' && <span style={{ color: '#334155', fontSize: '0.75rem', marginLeft: 'auto' }}>{(e.size/1024).toFixed(1)}kb</span>}
-              <span style={{ color: '#334155', fontSize: '0.7rem', marginLeft: 'auto' }}>{new Date(e.modified).toLocaleDateString()}</span>
+              onMouseEnter={ev => ev.currentTarget.style.background = T.bg}
+              onMouseLeave={ev => ev.currentTarget.style.background = ''}>
+              <span style={{ fontSize: '0.85rem' }}>{e.type === 'dir' ? '📁' : '📄'}</span>
+              <span style={{ fontFamily: T.mono, fontSize: '0.78rem', color: e.type === 'dir' ? T.text : T.text }}>{e.name}</span>
+              {e.type === 'file' && <span style={{ color: T.muted, fontSize: '0.68rem', marginLeft: 'auto', fontFamily: T.mono }}>{(e.size/1024).toFixed(1)}kb</span>}
+              <span style={{ color: 'rgba(0,0,0,0.2)', fontSize: '0.68rem', marginLeft: 'auto', fontFamily: T.mono }}>{new Date(e.modified).toLocaleDateString()}</span>
             </div>
           ))}
         </div>
@@ -330,9 +389,9 @@ function NFSTab() {
 
       {data?.type === 'file' && (
         <div>
-          <div style={{ marginBottom: '0.5rem', display: 'flex', justifyContent: 'space-between' }}>
-            <span style={{ color: '#94a3b8' }}>{parts[parts.length-1]}</span>
-            <button style={{ ...S.btn, padding: '2px 8px', fontSize: '0.75rem' }} onClick={() => load(parts.slice(0,-1).join('/'))}>← Back</button>
+          <div style={{ marginBottom: '0.5rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            <span style={{ fontFamily: T.mono, fontSize: '0.78rem', color: T.muted }}>{parts[parts.length-1]}</span>
+            <button style={S.btnGhost} onClick={() => load(parts.slice(0,-1).join('/'))}>← back</button>
           </div>
           <div style={S.code}>{data.content}</div>
         </div>
@@ -341,14 +400,14 @@ function NFSTab() {
   );
 }
 
-// --- Skill Graph ---
+// ── Skill Graph ───────────────────────────────────────────────────────────────
 const CREATOR_COLOR = {
-  claude:   { fill: '#312e81', stroke: '#818cf8', text: '#a5b4fc' },
-  openclaw: { fill: '#0c4a6e', stroke: '#38bdf8', text: '#7dd3fc' },
-  download: { fill: '#14532d', stroke: '#4ade80', text: '#86efac' },
-  other:    { fill: '#1e293b', stroke: '#475569', text: '#94a3b8' },
+  claude:   { fill: '#EDE9FE', stroke: '#7C3AED', text: '#5B21B6' },
+  openclaw: { fill: '#E0F2FE', stroke: '#0284C7', text: '#075985' },
+  download: { fill: '#DCFCE7', stroke: '#16A34A', text: '#14532D' },
+  other:    { fill: '#F1F5F9', stroke: '#94A3B8', text: '#475569' },
 };
-const WORKER_COLOR = { fill: '#1e293b', stroke: '#f59e0b', text: '#fbbf24' };
+const WORKER_COLOR = { fill: '#FEF3C7', stroke: '#D97706', text: '#78350F' };
 
 function useForceGraph(nodes, edges, width, height) {
   const posRef = useRef({});
@@ -357,58 +416,42 @@ function useForceGraph(nodes, edges, width, height) {
 
   useEffect(() => {
     if (!nodes.length) return;
-    // Init positions if new nodes
     nodes.forEach(n => {
       if (!posRef.current[n.id]) {
-        posRef.current[n.id] = {
-          x: width / 2 + (Math.random() - 0.5) * 200,
-          y: height / 2 + (Math.random() - 0.5) * 200,
-        };
+        posRef.current[n.id] = { x: width/2 + (Math.random()-0.5)*200, y: height/2 + (Math.random()-0.5)*200 };
         velRef.current[n.id] = { x: 0, y: 0 };
       }
     });
-
-    let frame;
-    let running = true;
+    let frame; let running = true;
     const simulate = () => {
       if (!running) return;
-      const pos = posRef.current;
-      const vel = velRef.current;
+      const pos = posRef.current, vel = velRef.current;
       const ids = nodes.map(n => n.id);
-
-      // Repulsion
       for (let i = 0; i < ids.length; i++) {
-        for (let j = i + 1; j < ids.length; j++) {
+        for (let j = i+1; j < ids.length; j++) {
           const a = ids[i], b = ids[j];
-          const dx = pos[b].x - pos[a].x, dy = pos[b].y - pos[a].y;
-          const dist = Math.max(Math.sqrt(dx * dx + dy * dy), 1);
-          const force = 4000 / (dist * dist);
-          vel[a].x -= (dx / dist) * force;
-          vel[a].y -= (dy / dist) * force;
-          vel[b].x += (dx / dist) * force;
-          vel[b].y += (dy / dist) * force;
+          const dx = pos[b].x-pos[a].x, dy = pos[b].y-pos[a].y;
+          const dist = Math.max(Math.sqrt(dx*dx+dy*dy), 1);
+          const force = 4000/(dist*dist);
+          vel[a].x -= (dx/dist)*force; vel[a].y -= (dy/dist)*force;
+          vel[b].x += (dx/dist)*force; vel[b].y += (dy/dist)*force;
         }
       }
-      // Attraction along edges
-      edges.forEach(([a, b]) => {
-        if (!pos[a] || !pos[b]) return;
-        const dx = pos[b].x - pos[a].x, dy = pos[b].y - pos[a].y;
-        const dist = Math.max(Math.sqrt(dx * dx + dy * dy), 1);
-        const force = (dist - 120) * 0.04;
-        vel[a].x += (dx / dist) * force;
-        vel[a].y += (dy / dist) * force;
-        vel[b].x -= (dx / dist) * force;
-        vel[b].y -= (dy / dist) * force;
+      edges.forEach(([a,b]) => {
+        if (!pos[a]||!pos[b]) return;
+        const dx = pos[b].x-pos[a].x, dy = pos[b].y-pos[a].y;
+        const dist = Math.max(Math.sqrt(dx*dx+dy*dy), 1);
+        const force = (dist-120)*0.04;
+        vel[a].x += (dx/dist)*force; vel[a].y += (dy/dist)*force;
+        vel[b].x -= (dx/dist)*force; vel[b].y -= (dy/dist)*force;
       });
-      // Gravity + damping + bounds
       ids.forEach(id => {
-        vel[id].x += (width / 2 - pos[id].x) * 0.008;
-        vel[id].y += (height / 2 - pos[id].y) * 0.008;
+        vel[id].x += (width/2-pos[id].x)*0.008; vel[id].y += (height/2-pos[id].y)*0.008;
         vel[id].x *= 0.85; vel[id].y *= 0.85;
-        pos[id].x = Math.max(60, Math.min(width - 60, pos[id].x + vel[id].x));
-        pos[id].y = Math.max(30, Math.min(height - 30, pos[id].y + vel[id].y));
+        pos[id].x = Math.max(60, Math.min(width-60, pos[id].x+vel[id].x));
+        pos[id].y = Math.max(30, Math.min(height-30, pos[id].y+vel[id].y));
       });
-      setTick(t => t + 1);
+      setTick(t => t+1);
       frame = requestAnimationFrame(simulate);
     };
     frame = requestAnimationFrame(simulate);
@@ -423,146 +466,118 @@ function SkillGraph({ workers, skills, onRefresh }) {
   const [hovered, setHovered] = useState(null);
 
   const nodes = [
-    ...workers.map(w => ({ id: 'w:' + w.id, type: 'worker', label: w.id, data: w })),
-    ...skills.map(s => ({ id: 's:' + s.name, type: 'skill', label: s.name, data: s })),
+    ...workers.map(w => ({ id: 'w:'+w.id, type: 'worker', label: w.id, data: w })),
+    ...skills.map(s  => ({ id: 's:'+s.name, type: 'skill',  label: s.name, data: s })),
   ];
-
-  // worker→skill edges (dashed, dim)
   const workerEdges = [];
   workers.forEach(w => {
-    (w.skills || []).forEach(sk => {
-      if (skills.find(s => s.name === sk.name)) {
-        workerEdges.push(['w:' + w.id, 's:' + sk.name]);
-      }
+    (w.skills||[]).forEach(sk => {
+      if (skills.find(s => s.name === sk.name)) workerEdges.push(['w:'+w.id, 's:'+sk.name]);
     });
   });
-
-  // skill→skill dependency edges (solid, directed)
   const skillEdges = [];
   skills.forEach(s => {
-    (s.parents || []).forEach(parentName => {
-      if (skills.find(p => p.name === parentName)) {
-        skillEdges.push(['s:' + parentName, 's:' + s.name]);
-      }
+    (s.parents||[]).forEach(p => {
+      if (skills.find(x => x.name === p)) skillEdges.push(['s:'+p, 's:'+s.name]);
     });
   });
-
   const allEdges = [...workerEdges, ...skillEdges];
   const pos = useForceGraph(nodes, allEdges, W, H);
 
-  // helper: shorten line by `r` px at the target end for arrow clearance
   function shortenLine(ax, ay, bx, by, r) {
-    const dx = bx - ax, dy = by - ay;
-    const len = Math.sqrt(dx * dx + dy * dy) || 1;
-    return { x2: bx - (dx / len) * r, y2: by - (dy / len) * r };
+    const dx = bx-ax, dy = by-ay, len = Math.sqrt(dx*dx+dy*dy)||1;
+    return { x2: bx-(dx/len)*r, y2: by-(dy/len)*r };
   }
 
   return (
-    <div style={{ background: '#0a0f1a', borderRadius: '10px', overflow: 'hidden', marginBottom: '1.5rem', position: 'relative' }}>
+    <div style={{ background: '#FAFAFA', border: T.border, borderRadius: T.radius, overflow: 'hidden', marginBottom: '1.5rem', position: 'relative' }}>
       {onRefresh && (
         <button onClick={onRefresh} style={{
           position: 'absolute', top: 10, right: 12, zIndex: 2,
-          background: 'none', border: '1px solid #1e3a5f', borderRadius: '4px',
-          color: '#334155', fontSize: '0.75rem', cursor: 'pointer', padding: '2px 7px',
+          background: 'none', border: '1px solid rgba(0,0,0,0.1)', borderRadius: T.radius,
+          color: T.muted, fontSize: '0.7rem', fontFamily: T.mono, cursor: 'pointer', padding: '2px 8px',
         }}>↺</button>
       )}
       <svg width="100%" viewBox={`0 0 ${W} ${H}`} style={{ display: 'block' }}>
         <defs>
-          {Object.entries(CREATOR_COLOR).map(([k, v]) => (
+          {Object.entries(CREATOR_COLOR).map(([k,v]) => (
             <radialGradient key={k} id={`grad-${k}`} cx="50%" cy="50%" r="50%">
-              <stop offset="0%" stopColor={v.fill} stopOpacity="0.9" />
-              <stop offset="100%" stopColor={v.stroke} stopOpacity="0.3" />
+              <stop offset="0%" stopColor={v.fill} stopOpacity="1" />
+              <stop offset="100%" stopColor={v.stroke} stopOpacity="0.15" />
             </radialGradient>
           ))}
-          {/* Arrow marker for dependency edges */}
           <marker id="arrow" markerWidth="6" markerHeight="6" refX="5" refY="3" orient="auto">
-            <path d="M0,0 L0,6 L6,3 z" fill="#2d4a6a" />
+            <path d="M0,0 L0,6 L6,3 z" fill="#CBD5E1" />
           </marker>
           <marker id="arrow-hov" markerWidth="6" markerHeight="6" refX="5" refY="3" orient="auto">
-            <path d="M0,0 L0,6 L6,3 z" fill="#f59e0b" />
+            <path d="M0,0 L0,6 L6,3 z" fill={T.orange} />
           </marker>
         </defs>
 
-        {/* Worker→skill edges (dashed) */}
-        {workerEdges.map(([a, b], i) => {
-          if (!pos[a] || !pos[b]) return null;
-          const isHov = hovered === a || hovered === b;
-          return (
-            <line key={'we' + i}
-              x1={pos[a].x} y1={pos[a].y} x2={pos[b].x} y2={pos[b].y}
-              stroke={isHov ? '#f59e0b' : '#1e3a5f'}
-              strokeWidth={isHov ? 1.2 : 0.7}
-              strokeOpacity={isHov ? 0.7 : 0.3}
-              strokeDasharray="3 3"
-            />
-          );
+        {/* Worker→skill dashed edges */}
+        {workerEdges.map(([a,b],i) => {
+          if (!pos[a]||!pos[b]) return null;
+          const isHov = hovered===a||hovered===b;
+          return <line key={'we'+i} x1={pos[a].x} y1={pos[a].y} x2={pos[b].x} y2={pos[b].y}
+            stroke={isHov ? T.orange : '#E2E8F0'} strokeWidth={isHov ? 1.2 : 0.8}
+            strokeOpacity={isHov ? 0.8 : 0.6} strokeDasharray="3 3" />;
         })}
 
-        {/* Skill→skill dependency edges (solid + arrow) */}
-        {skillEdges.map(([a, b], i) => {
-          if (!pos[a] || !pos[b]) return null;
-          const isHov = hovered === a || hovered === b;
-          const { x2, y2 } = shortenLine(pos[a].x, pos[a].y, pos[b].x, pos[b].y, 24);
-          return (
-            <line key={'se' + i}
-              x1={pos[a].x} y1={pos[a].y} x2={x2} y2={y2}
-              stroke={isHov ? '#f59e0b' : '#2d4a6a'}
-              strokeWidth={isHov ? 1.8 : 1.1}
-              strokeOpacity={isHov ? 1 : 0.6}
-              markerEnd={isHov ? 'url(#arrow-hov)' : 'url(#arrow)'}
-            />
-          );
+        {/* Skill→skill dependency edges with arrows */}
+        {skillEdges.map(([a,b],i) => {
+          if (!pos[a]||!pos[b]) return null;
+          const isHov = hovered===a||hovered===b;
+          const {x2,y2} = shortenLine(pos[a].x, pos[a].y, pos[b].x, pos[b].y, 25);
+          return <line key={'se'+i} x1={pos[a].x} y1={pos[a].y} x2={x2} y2={y2}
+            stroke={isHov ? T.orange : '#CBD5E1'} strokeWidth={isHov ? 1.8 : 1.1}
+            strokeOpacity={isHov ? 1 : 0.7}
+            markerEnd={isHov ? 'url(#arrow-hov)' : 'url(#arrow)'} />;
         })}
 
         {/* Skill nodes */}
-        {nodes.filter(n => n.type === 'skill').map(n => {
+        {nodes.filter(n => n.type==='skill').map(n => {
           if (!pos[n.id]) return null;
           const c = CREATOR_COLOR[n.data.creator] || CREATOR_COLOR.other;
-          const isHov = hovered === n.id;
+          const isHov = hovered===n.id;
           const r = isHov ? 30 : 24;
-          const hasParents = (n.data.parents || []).length > 0;
           return (
             <g key={n.id} transform={`translate(${pos[n.id].x},${pos[n.id].y})`}
-              onMouseEnter={() => setHovered(n.id)} onMouseLeave={() => setHovered(null)}
-              style={{ cursor: 'default' }}>
-              <circle r={r} fill={`url(#grad-${n.data.creator || 'other'})`}
-                stroke={c.stroke} strokeWidth={isHov ? 2.5 : hasParents ? 1.5 : 1} />
-              <text textAnchor="middle" dy="0.35em" fill={c.text} fontSize={isHov ? 9.5 : 8.5}
-                style={{ pointerEvents: 'none', userSelect: 'none' }}>
-                {n.label.length > 12 ? n.label.slice(0, 11) + '…' : n.label}
+              onMouseEnter={() => setHovered(n.id)} onMouseLeave={() => setHovered(null)}>
+              <circle r={r} fill={`url(#grad-${n.data.creator||'other'})`}
+                stroke={c.stroke} strokeWidth={isHov ? 2 : 1.2} />
+              <text textAnchor="middle" dy="0.35em" fill={c.text} fontSize={isHov ? 9 : 8}
+                style={{ pointerEvents:'none', userSelect:'none', fontFamily: T.mono }}>
+                {n.label.length>12 ? n.label.slice(0,11)+'…' : n.label}
               </text>
-              {isHov && (
-                <>
-                  <text y={r + 13} textAnchor="middle" fill="#94a3b8" fontSize={8.5}
-                    style={{ pointerEvents: 'none' }}>
-                    {n.data.desc?.slice(0, 45)}
+              {isHov && <>
+                <text y={r+13} textAnchor="middle" fill="#888" fontSize={8}
+                  style={{ pointerEvents:'none', fontFamily: T.ui }}>
+                  {n.data.desc?.slice(0,45)}
+                </text>
+                {(n.data.parents||[]).length > 0 && (
+                  <text y={r+24} textAnchor="middle" fill="#AAAAAA" fontSize={7.5}
+                    style={{ pointerEvents:'none', fontFamily: T.mono }}>
+                    needs: {n.data.parents.join(', ')}
                   </text>
-                  {(n.data.parents || []).length > 0 && (
-                    <text y={r + 24} textAnchor="middle" fill="#475569" fontSize={7.5}
-                      style={{ pointerEvents: 'none' }}>
-                      needs: {n.data.parents.join(', ')}
-                    </text>
-                  )}
-                </>
-              )}
+                )}
+              </>}
             </g>
           );
         })}
 
         {/* Worker nodes */}
-        {nodes.filter(n => n.type === 'worker').map(n => {
+        {nodes.filter(n => n.type==='worker').map(n => {
           if (!pos[n.id]) return null;
-          const isHov = hovered === n.id;
+          const isHov = hovered===n.id;
           const sz = isHov ? 38 : 30;
           return (
             <g key={n.id} transform={`translate(${pos[n.id].x},${pos[n.id].y})`}
-              onMouseEnter={() => setHovered(n.id)} onMouseLeave={() => setHovered(null)}
-              style={{ cursor: 'default' }}>
-              <rect x={-sz/2} y={-sz/2} width={sz} height={sz} rx={4}
+              onMouseEnter={() => setHovered(n.id)} onMouseLeave={() => setHovered(null)}>
+              <rect x={-sz/2} y={-sz/2} width={sz} height={sz} rx={2}
                 fill={WORKER_COLOR.fill} stroke={WORKER_COLOR.stroke} strokeWidth={isHov ? 2 : 1.5} />
               <text textAnchor="middle" dy="0.35em" fill={WORKER_COLOR.text} fontSize={8} fontWeight="bold"
-                style={{ pointerEvents: 'none', userSelect: 'none' }}>
-                {n.label.replace('hw-worker-', 'w')}
+                style={{ pointerEvents:'none', userSelect:'none', fontFamily: T.mono }}>
+                {n.label.replace('hw-worker-','w')}
               </text>
             </g>
           );
@@ -570,36 +585,30 @@ function SkillGraph({ workers, skills, onRefresh }) {
       </svg>
 
       {/* Legend */}
-      <div style={{ position: 'absolute', bottom: 10, left: 14, display: 'flex', gap: '1.25rem', fontSize: '0.65rem', color: '#334155' }}>
-        <span>─ ─ worker uses</span>
-        <span style={{ color: '#2d4a6a' }}>→ depends on</span>
+      <div style={{ position:'absolute', bottom:10, left:14, display:'flex', gap:'1.25rem', fontSize:'0.62rem', fontFamily: T.mono, color: T.muted }}>
+        <span style={{ borderBottom: '1px dashed #CBD5E1', paddingBottom: 1 }}>worker uses</span>
+        <span style={{ color: '#94A3B8' }}>→ depends on</span>
       </div>
-      <div style={{ position: 'absolute', bottom: 10, right: 16, display: 'flex', gap: '1rem', fontSize: '0.65rem' }}>
-        {Object.entries(CREATOR_COLOR).map(([k, v]) => (
-          <span key={k} style={{ color: v.text }}>● {k}</span>
-        ))}
+      <div style={{ position:'absolute', bottom:10, right:16, display:'flex', gap:'1rem', fontSize:'0.62rem', fontFamily: T.mono }}>
+        {Object.entries(CREATOR_COLOR).map(([k,v]) => <span key={k} style={{ color: v.text }}>● {k}</span>)}
         <span style={{ color: WORKER_COLOR.text }}>■ worker</span>
       </div>
     </div>
   );
 }
 
-// --- Skills Tab ---
+// ── Skills Tab ────────────────────────────────────────────────────────────────
 function SkillsTab({ workers }) {
   const [skills, setSkills] = useState([]);
   const [loading, setLoading] = useState(true);
   const [installUrl, setInstallUrl] = useState('');
   const [newSkill, setNewSkill] = useState({ name: '', creator: 'claude', desc: '' });
-  const [mode, setMode] = useState(null); // 'url' | 'manual'
+  const [mode, setMode] = useState(null);
   const [working, setWorking] = useState(false);
 
   async function load() {
     setLoading(true);
-    try {
-      const r = await fetch('/api/skills');
-      const d = await r.json();
-      setSkills(d.skills || []);
-    } catch {}
+    try { const r = await fetch('/api/skills'); const d = await r.json(); setSkills(d.skills || []); } catch {}
     setLoading(false);
   }
 
@@ -617,10 +626,7 @@ function SkillsTab({ workers }) {
     setNewSkill({ name: '', creator: 'claude', desc: '' }); setMode(null); setWorking(false); load();
   }
 
-  async function deleteSkill(slug) {
-    await fetch(`/api/skills?slug=${slug}`, { method: 'DELETE' });
-    load();
-  }
+  async function deleteSkill(slug) { await fetch(`/api/skills?slug=${slug}`, { method: 'DELETE' }); load(); }
 
   useEffect(() => { load(); }, []);
 
@@ -628,75 +634,73 @@ function SkillsTab({ workers }) {
   skills.forEach(s => { (byCreator[s.creator] || byCreator.other).push(s); });
 
   const creatorStyle = (c) => ({
-    claude:    { bg: '#312e81', color: '#a5b4fc', border: '#4338ca44', icon: '◆' },
-    openclaw:  { bg: '#0c4a6e', color: '#7dd3fc', border: '#0284c744', icon: '⬡' },
-    download:  { bg: '#14532d', color: '#86efac', border: '#16a34a44', icon: '↓' },
-    other:     { bg: '#1e293b', color: '#94a3b8', border: '#33415544', icon: '·' },
-  }[c] || { bg: '#1e293b', color: '#94a3b8', border: '#33415544', icon: '·' });
+    claude:   { bg: '#EDE9FE', color: '#5B21B6', border: '#7C3AED1A', icon: '◆' },
+    openclaw: { bg: '#E0F2FE', color: '#075985', border: '#0284C71A', icon: '⬡' },
+    download: { bg: '#DCFCE7', color: '#14532D', border: '#16A34A1A', icon: '↓' },
+    other:    { bg: '#F1F5F9', color: '#475569', border: '#94A3B81A', icon: '·' },
+  }[c] || { bg: '#F1F5F9', color: '#475569', border: '#94A3B81A', icon: '·' });
 
   return (
     <div>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.5rem' }}>
-        <div style={{ color: '#94a3b8', fontSize: '0.8rem' }}>{skills.length} shared skills on NFS · available to all workers</div>
-        <div style={{ display: 'flex', gap: '0.5rem' }}>
-          <button onClick={() => setMode(mode === 'url' ? null : 'url')} style={{ ...S.btn, background: '#0f172a', border: '1px solid #334155', color: '#94a3b8', fontSize: '0.8rem', padding: '0.3rem 0.75rem' }}>↓ Install from URL</button>
-          <button onClick={() => setMode(mode === 'manual' ? null : 'manual')} style={{ ...S.btn, fontSize: '0.8rem', padding: '0.3rem 0.75rem' }}>+ Publish Skill</button>
-          <button onClick={load} style={{ ...S.btn, background: '#0f172a', border: '1px solid #334155', color: '#64748b', fontSize: '0.8rem', padding: '0.3rem 0.6rem' }}>↺</button>
+        <div style={{ color: T.muted, fontSize: '0.72rem', fontFamily: T.mono }}>{skills.length} shared skills · available to all workers</div>
+        <div style={{ display: 'flex', gap: '0.4rem' }}>
+          <button onClick={() => setMode(mode==='url' ? null : 'url')} style={S.btnGhost}>↓ install url</button>
+          <button onClick={() => setMode(mode==='manual' ? null : 'manual')} style={S.btn}>+ publish</button>
+          <button onClick={load} style={{ ...S.btnGhost, padding: '0.38rem 0.6rem' }}>↺</button>
         </div>
       </div>
 
       {mode === 'url' && (
-        <div style={{ ...S.card, marginBottom: '1rem', display: 'flex', gap: '0.5rem' }}>
-          <input style={{ ...S.input, fontSize: '0.82rem' }} value={installUrl} onChange={e => setInstallUrl(e.target.value)}
-            onKeyDown={e => e.key === 'Enter' && installFromUrl()}
+        <div style={{ ...S.card, marginBottom: '1rem', display: 'flex', gap: '0.75rem', alignItems: 'flex-end' }}>
+          <input style={S.input} value={installUrl} onChange={e => setInstallUrl(e.target.value)}
+            onKeyDown={e => e.key==='Enter' && installFromUrl()}
             placeholder="https://raw.githubusercontent.com/.../skill.sh" />
-          <button style={S.btn} onClick={installFromUrl} disabled={working}>{working ? '...' : 'Install'}</button>
+          <button style={{ ...S.btn, flexShrink: 0 }} onClick={installFromUrl} disabled={working}>{working ? '...' : 'install'}</button>
         </div>
       )}
 
       {mode === 'manual' && (
-        <div style={{ ...S.card, marginBottom: '1rem', display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
-          <input style={{ ...S.input, fontSize: '0.82rem', flex: '2' }} value={newSkill.name} onChange={e => setNewSkill(s => ({ ...s, name: e.target.value }))} placeholder="Skill name" />
-          <select style={{ ...S.input, flex: '0 0 auto', width: 'auto' }} value={newSkill.creator} onChange={e => setNewSkill(s => ({ ...s, creator: e.target.value }))}>
+        <div style={{ ...S.card, marginBottom: '1rem', display: 'flex', gap: '0.75rem', flexWrap: 'wrap', alignItems: 'flex-end' }}>
+          <input style={{ ...S.input, flex: 2 }} value={newSkill.name} onChange={e => setNewSkill(s => ({...s, name: e.target.value}))} placeholder="skill name" />
+          <select style={{ ...S.input, flex: '0 0 auto', width: 'auto', cursor: 'pointer' }} value={newSkill.creator} onChange={e => setNewSkill(s => ({...s, creator: e.target.value}))}>
             <option value="claude">claude</option>
             <option value="openclaw">openclaw</option>
           </select>
-          <input style={{ ...S.input, fontSize: '0.82rem', flex: '3' }} value={newSkill.desc} onChange={e => setNewSkill(s => ({ ...s, desc: e.target.value }))} placeholder="Description" />
-          <button style={S.btn} onClick={publishSkill} disabled={working}>{working ? '...' : 'Publish'}</button>
+          <input style={{ ...S.input, flex: 3 }} value={newSkill.desc} onChange={e => setNewSkill(s => ({...s, desc: e.target.value}))} placeholder="description" />
+          <button style={{ ...S.btn, flexShrink: 0 }} onClick={publishSkill} disabled={working}>{working ? '...' : 'publish'}</button>
         </div>
       )}
 
-      {loading && <div style={{ color: '#475569' }}>Loading...</div>}
+      {loading && <div style={{ color: T.muted, fontFamily: T.mono, fontSize: '0.78rem' }}>loading...</div>}
 
       {!loading && <SkillGraph workers={workers} skills={skills} onRefresh={load} />}
 
-      {!loading && Object.entries(byCreator).filter(([, arr]) => arr.length > 0).map(([creator, arr]) => {
+      {!loading && Object.entries(byCreator).filter(([,arr]) => arr.length > 0).map(([creator, arr]) => {
         const st = creatorStyle(creator);
         return (
           <div key={creator} style={S.section}>
             <div style={S.sectionTitle}>{st.icon} {creator} ({arr.length})</div>
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', gap: '0.75rem' }}>
               {arr.map(sk => {
-                const slug = sk.name.toLowerCase().replace(/[^a-z0-9]+/g, '_');
+                const slug = sk.name.toLowerCase().replace(/[^a-z0-9]+/g,'_');
                 return (
-                  <div key={sk.name} style={{
-                    background: st.bg, border: `1px solid ${st.border}`, borderRadius: '8px', padding: '0.75rem',
-                  }}>
+                  <div key={sk.name} style={{ background: st.bg, border: `1px solid ${st.border}`, borderRadius: T.radius, padding: '0.75rem' }}>
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
-                      <span style={{ color: st.color, fontSize: '0.85rem', fontWeight: 'bold' }}>{st.icon} {sk.name}</span>
+                      <span style={{ color: st.color, fontSize: '0.82rem', fontFamily: T.mono, fontWeight: 500 }}>{st.icon} {sk.name}</span>
                       <div style={{ display: 'flex', gap: '0.4rem', alignItems: 'center', flexShrink: 0 }}>
                         {sk.origin?.startsWith('http') && (
-                          <a href={sk.origin} target="_blank" rel="noreferrer" style={{ color: st.color, fontSize: '0.7rem', opacity: 0.6, textDecoration: 'none' }}>↗</a>
+                          <a href={sk.origin} target="_blank" rel="noreferrer" style={{ color: st.color, fontSize: '0.7rem', opacity: 0.5, textDecoration: 'none' }}>↗</a>
                         )}
-                        <button onClick={() => deleteSkill(slug)} style={{ background: 'none', border: 'none', color: st.color, opacity: 0.4, cursor: 'pointer', fontSize: '0.85rem', padding: '0', lineHeight: 1 }}>×</button>
+                        <button onClick={() => deleteSkill(slug)} style={{ background: 'none', border: 'none', color: st.color, opacity: 0.35, cursor: 'pointer', fontSize: '0.9rem', padding: 0, lineHeight: 1 }}>×</button>
                       </div>
                     </div>
-                    {sk.desc && <div style={{ color: '#cbd5e1', fontSize: '0.75rem', marginTop: '0.35rem', lineHeight: 1.5 }}>{sk.desc}</div>}
+                    {sk.desc && <div style={{ color: '#555', fontSize: '0.75rem', marginTop: '0.35rem', lineHeight: 1.5, fontFamily: T.ui }}>{sk.desc}</div>}
                     {sk.origin?.startsWith('skill:') && (
-                      <div style={{ color: st.color, fontFamily: 'monospace', fontSize: '0.7rem', marginTop: '0.4rem', opacity: 0.7, background: '#0f172a', padding: '2px 6px', borderRadius: '4px', display: 'inline-block' }}>/{sk.origin.replace('skill:', '')}</div>
+                      <div style={{ color: st.color, fontFamily: T.mono, fontSize: '0.68rem', marginTop: '0.4rem', opacity: 0.7, background: 'rgba(0,0,0,0.04)', padding: '2px 6px', borderRadius: T.radius, display: 'inline-block' }}>/{sk.origin.replace('skill:','')}</div>
                     )}
                     {sk.created_at && (
-                      <div style={{ color: '#475569', fontSize: '0.68rem', marginTop: '0.4rem' }}>{new Date(sk.created_at).toLocaleDateString()}</div>
+                      <div style={{ color: T.muted, fontSize: '0.65rem', marginTop: '0.4rem', fontFamily: T.mono }}>{new Date(sk.created_at).toLocaleDateString()}</div>
                     )}
                   </div>
                 );
@@ -707,15 +711,17 @@ function SkillsTab({ workers }) {
       })}
 
       {!loading && !skills.length && (
-        <div style={{ ...S.card, color: '#94a3b8', textAlign: 'center', padding: '2rem' }}>No shared skills yet. Publish one or install from a URL.</div>
+        <div style={{ ...S.card, color: T.muted, textAlign: 'center', padding: '2rem', fontFamily: T.mono, fontSize: '0.78rem' }}>
+          No shared skills yet. Publish one or install from a URL.
+        </div>
       )}
     </div>
   );
 }
 
-// --- Linear Tab ---
-const PRIORITY_LABEL = ['—', '!!', '!', '·', '↓'];
-const PRIORITY_COLOR = ['#334155', '#ef4444', '#f97316', '#f59e0b', '#64748b'];
+// ── Linear Tab ────────────────────────────────────────────────────────────────
+const PRIORITY_LABEL = ['—','!!','!','·','↓'];
+const PRIORITY_COLOR = ['rgba(0,0,0,0.15)', T.red, T.orange, '#D97706', 'rgba(0,0,0,0.2)'];
 
 function LinearTab() {
   const [state, setState] = useState({ loading: true });
@@ -727,39 +733,37 @@ function LinearTab() {
       const d = await r.json();
       if (d.not_configured) setState({ not_configured: true });
       else if (d.not_authenticated) {
-        // Check if there's an error param in the URL (from failed callback)
         const urlError = new URLSearchParams(window.location.search).get('linear_error');
         setState({ not_authenticated: true, urlError });
       }
       else if (d.data) setState({ data: d.data });
       else setState({ error: JSON.stringify(d.errors || d) });
-    } catch (e) {
-      setState({ error: e.message });
-    }
+    } catch (e) { setState({ error: e.message }); }
   }
 
   useEffect(() => { load(); }, []);
 
-  if (state.loading) return <div style={{ color: '#475569' }}>Loading...</div>;
+  if (state.loading) return <div style={{ color: T.muted, fontFamily: T.mono, fontSize: '0.78rem' }}>loading...</div>;
 
   if (state.not_configured) return (
-    <div style={{ ...S.card, color: '#64748b', textAlign: 'center', padding: '2rem' }}>
+    <div style={{ ...S.card, color: T.muted, textAlign: 'center', padding: '2rem' }}>
       <div style={{ fontSize: '1.5rem', marginBottom: '0.5rem' }}>⚙</div>
-      <div style={{ marginBottom: '0.5rem' }}>LINEAR_CLIENT_ID not set on Vercel.</div>
-      <div style={{ fontSize: '0.8rem', color: '#334155' }}>Add it as an environment variable and redeploy.</div>
+      <div style={{ marginBottom: '0.5rem', fontFamily: T.mono, fontSize: '0.78rem' }}>LINEAR_CLIENT_ID not set on Vercel.</div>
+      <div style={{ fontSize: '0.75rem', color: 'rgba(0,0,0,0.2)', fontFamily: T.mono }}>Add it as an environment variable and redeploy.</div>
     </div>
   );
 
   if (state.not_authenticated) return (
     <div style={{ ...S.card, textAlign: 'center', padding: '3rem' }}>
       <div style={{ fontSize: '2rem', marginBottom: '0.75rem' }}>◈</div>
-      <div style={{ color: '#94a3b8', marginBottom: '1.5rem', fontSize: '0.95rem' }}>Connect your Linear workspace to see issues</div>
-      <a href="/api/linear/auth"
-        style={{ background: '#5e6ad2', color: '#fff', borderRadius: '8px', padding: '0.6rem 1.5rem', textDecoration: 'none', fontSize: '0.9rem' }}>
-        Connect Linear
-      </a>
+      <div style={{ color: T.muted, marginBottom: '1.5rem', fontSize: '0.9rem' }}>Connect your Linear workspace to see issues</div>
+      <a href="/api/linear/auth" style={{
+        background: '#5e6ad2', color: '#fff', borderRadius: T.radius,
+        padding: '0.6rem 1.5rem', textDecoration: 'none', fontSize: '0.85rem',
+        fontFamily: T.mono, textTransform: 'uppercase', letterSpacing: '0.06em',
+      }}>Connect Linear</a>
       {state.urlError && (
-        <div style={{ marginTop: '1rem', color: '#ef4444', fontSize: '0.75rem', wordBreak: 'break-all' }}>
+        <div style={{ marginTop: '1rem', color: T.red, fontSize: '0.72rem', fontFamily: T.mono, wordBreak: 'break-all' }}>
           Error: {decodeURIComponent(state.urlError)}
         </div>
       )}
@@ -767,62 +771,49 @@ function LinearTab() {
   );
 
   if (state.error) return (
-    <div style={{ color: '#ef4444', padding: '1rem' }}>
+    <div style={{ color: T.red, padding: '1rem', fontFamily: T.mono, fontSize: '0.78rem' }}>
       Error: {state.error}
-      <button onClick={load} style={{ ...S.btn, marginLeft: '1rem', padding: '0.3rem 0.75rem', fontSize: '0.8rem' }}>Retry</button>
+      <button onClick={load} style={{ ...S.btnGhost, marginLeft: '1rem' }}>retry</button>
     </div>
   );
 
   const { viewer, teams } = state.data;
   const issues = viewer?.assignedIssues?.nodes || [];
-
-  // Group by team
   const byTeam = {};
-  issues.forEach(i => {
-    const k = i.team?.key || '?';
-    (byTeam[k] = byTeam[k] || []).push(i);
-  });
+  issues.forEach(i => { const k = i.team?.key||'?'; (byTeam[k]=byTeam[k]||[]).push(i); });
 
   return (
     <div>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.5rem' }}>
         <div style={{ display: 'flex', gap: '1.5rem', alignItems: 'center' }}>
-          <span style={{ color: '#94a3b8', fontSize: '0.85rem' }}>◈ {viewer?.name}</span>
-          <span style={{ color: '#334155', fontSize: '0.8rem' }}>{issues.length} open issues</span>
+          <span style={{ color: T.muted, fontSize: '0.82rem' }}>◈ {viewer?.name}</span>
+          <span style={{ color: 'rgba(0,0,0,0.25)', fontSize: '0.75rem', fontFamily: T.mono }}>{issues.length} open</span>
           {teams?.nodes?.map(t => (
-            <span key={t.id} style={{ background: t.color ? t.color + '22' : '#1e293b', color: t.color || '#64748b', borderRadius: '4px', padding: '2px 8px', fontSize: '0.75rem', border: `1px solid ${t.color || '#334155'}44` }}>
+            <span key={t.id} style={{ background: t.color ? t.color+'18' : T.bg, color: t.color||T.muted, borderRadius: T.radius, padding: '2px 8px', fontSize: '0.7rem', fontFamily: T.mono, border: `1px solid ${t.color||'rgba(0,0,0,0.08)'}30` }}>
               {t.key}
             </span>
           ))}
         </div>
-        <a href="/api/linear/disconnect" style={{ color: '#334155', fontSize: '0.75rem', textDecoration: 'none' }}>disconnect</a>
+        <a href="/api/linear/disconnect" style={{ color: 'rgba(0,0,0,0.2)', fontSize: '0.7rem', textDecoration: 'none', fontFamily: T.mono }}>disconnect</a>
       </div>
 
       {Object.entries(byTeam).map(([teamKey, teamIssues]) => (
         <div key={teamKey} style={S.section}>
           <div style={S.sectionTitle}>{teamKey} · {teamIssues.length}</div>
-          <div style={S.card}>
+          <div style={{ ...S.card, padding: 0, overflow: 'hidden' }}>
             {teamIssues.map((issue, idx) => (
               <a key={issue.id} href={issue.url} target="_blank" rel="noreferrer"
-                style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', padding: '0.55rem 0.75rem', textDecoration: 'none', color: 'inherit', borderBottom: idx < teamIssues.length - 1 ? '1px solid #0f172a' : 'none' }}
-                onMouseEnter={e => e.currentTarget.style.background = '#0f172a'}
+                style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', padding: '0.55rem 0.75rem', textDecoration: 'none', color: 'inherit', borderBottom: idx < teamIssues.length-1 ? T.border : 'none', transition: 'background 0.1s' }}
+                onMouseEnter={e => e.currentTarget.style.background = T.bg}
                 onMouseLeave={e => e.currentTarget.style.background = ''}>
-                {/* Priority */}
-                <span style={{ color: PRIORITY_COLOR[issue.priority] || '#334155', fontSize: '0.75rem', fontWeight: 'bold', width: 14, textAlign: 'center', flexShrink: 0 }}>
-                  {PRIORITY_LABEL[issue.priority] || '—'}
+                <span style={{ color: PRIORITY_COLOR[issue.priority]||'rgba(0,0,0,0.15)', fontSize: '0.72rem', fontFamily: T.mono, fontWeight: '600', width: 14, textAlign: 'center', flexShrink: 0 }}>
+                  {PRIORITY_LABEL[issue.priority]||'—'}
                 </span>
-                {/* State dot */}
-                <span style={{ width: 8, height: 8, borderRadius: '50%', background: issue.state?.color || '#334155', flexShrink: 0 }} />
-                {/* Identifier */}
-                <span style={{ color: '#334155', fontSize: '0.75rem', flexShrink: 0, width: 72 }}>{issue.identifier}</span>
-                {/* Title */}
-                <span style={{ color: '#e2e8f0', fontSize: '0.82rem', flex: 1, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{issue.title}</span>
-                {/* State name */}
-                <span style={{ color: issue.state?.color || '#475569', fontSize: '0.72rem', flexShrink: 0 }}>{issue.state?.name}</span>
-                {/* Time */}
-                <span style={{ color: '#334155', fontSize: '0.7rem', flexShrink: 0 }}>
-                  {new Date(issue.updatedAt).toLocaleDateString()}
-                </span>
+                <span style={{ width: 8, height: 8, borderRadius: '50%', background: issue.state?.color||'#E0E0E0', flexShrink: 0 }} />
+                <span style={{ color: T.muted, fontSize: '0.7rem', flexShrink: 0, width: 72, fontFamily: T.mono }}>{issue.identifier}</span>
+                <span style={{ color: T.text, fontSize: '0.82rem', flex: 1, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{issue.title}</span>
+                <span style={{ color: issue.state?.color||T.muted, fontSize: '0.7rem', flexShrink: 0, fontFamily: T.mono }}>{issue.state?.name}</span>
+                <span style={{ color: 'rgba(0,0,0,0.25)', fontSize: '0.68rem', flexShrink: 0, fontFamily: T.mono }}>{new Date(issue.updatedAt).toLocaleDateString()}</span>
               </a>
             ))}
           </div>
@@ -830,25 +821,21 @@ function LinearTab() {
       ))}
 
       {!issues.length && (
-        <div style={{ ...S.card, color: '#334155', textAlign: 'center', padding: '2rem' }}>No open issues assigned to you.</div>
+        <div style={{ ...S.card, color: T.muted, textAlign: 'center', padding: '2rem', fontFamily: T.mono, fontSize: '0.78rem' }}>No open issues assigned to you.</div>
       )}
     </div>
   );
 }
 
-// --- Main ---
+// ── Main Dashboard ────────────────────────────────────────────────────────────
 export default function Dashboard() {
   const [tab, setTab] = useState('workers');
   const [workers, setWorkers] = useState([]);
-  const tabs = [['workers','Workers'], ['skills','Skills'], ['nfs','NFS Share'], ['linear','Linear']];
+  const tabs = [['workers','Workers'],['skills','Skills'],['nfs','NFS Share'],['linear','Linear']];
 
   useEffect(() => {
     async function poll() {
-      try {
-        const r = await fetch('/api/status');
-        const d = await r.json();
-        setWorkers(Object.values(d.workers || {}));
-      } catch {}
+      try { const r = await fetch('/api/status'); const d = await r.json(); setWorkers(Object.values(d.workers||{})); } catch {}
     }
     poll();
     const t = setInterval(poll, 5000);
@@ -858,19 +845,21 @@ export default function Dashboard() {
   return (
     <div style={S.page}>
       <div style={S.header}>
-        <h1 style={S.title}>⬡ H Worker Dashboard</h1>
+        <Logo />
         <a href="https://github.com/human-generated/h-worker" target="_blank"
-          style={{ color: '#475569', fontSize: '0.8rem', textDecoration: 'none' }}>github →</a>
+          style={{ color: T.muted, fontSize: '0.7rem', textDecoration: 'none', fontFamily: T.mono }}>
+          github →
+        </a>
       </div>
       <div style={S.tabs}>
-        {tabs.map(([id, label]) => (
+        {tabs.map(([id,label]) => (
           <button key={id} style={S.tab(tab===id)} onClick={() => setTab(id)}>{label}</button>
         ))}
       </div>
-      {tab === 'workers' && <WorkersTab workers={workers} />}
-      {tab === 'skills' && <SkillsTab workers={workers} />}
-      {tab === 'nfs' && <NFSTab />}
-      {tab === 'linear' && <LinearTab />}
+      {tab==='workers' && <WorkersTab workers={workers} />}
+      {tab==='skills'  && <SkillsTab workers={workers} />}
+      {tab==='nfs'     && <NFSTab />}
+      {tab==='linear'  && <LinearTab />}
     </div>
   );
 }
