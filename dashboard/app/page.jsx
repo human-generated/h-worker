@@ -182,6 +182,197 @@ function DesktopWindow({ worker, onClose }) {
   );
 }
 
+// ── State Machine Graph ───────────────────────────────────────────────────────
+const SM_STATES = {
+  pending:   { label: 'pending',   x: 80,  y: 60,  fill: '#FEF3C7', stroke: '#D97706', text: '#78350F' },
+  assigned:  { label: 'assigned',  x: 250, y: 60,  fill: '#DBEAFE', stroke: '#2563EB', text: '#1E3A8A' },
+  done:      { label: 'done',      x: 420, y: 60,  fill: '#DCFCE7', stroke: '#16A34A', text: '#14532D' },
+  failed:    { label: 'failed',    x: 250, y: 150, fill: '#FEE2E2', stroke: '#DC2626', text: '#7F1D1D' },
+  cancelled: { label: 'cancelled', x: 80,  y: 150, fill: '#F1F5F9', stroke: '#94A3B8', text: '#475569' },
+};
+const SM_EDGES = [
+  ['pending', 'assigned'],
+  ['assigned', 'done'],
+  ['assigned', 'failed'],
+  ['pending', 'cancelled'],
+  ['assigned', 'cancelled'],
+];
+
+function StateMachineGraph({ currentStatus, transitions = [] }) {
+  const W = 520, H = 210, R = 34;
+  const visited = new Set(transitions.map(t => t.to));
+  if (currentStatus) visited.add(currentStatus);
+
+  function arrow(fromKey, toKey) {
+    const a = SM_STATES[fromKey], b = SM_STATES[toKey];
+    if (!a || !b) return null;
+    const dx = b.x - a.x, dy = b.y - a.y;
+    const len = Math.sqrt(dx*dx + dy*dy);
+    const ux = dx/len, uy = dy/len;
+    const x1 = a.x + ux*R, y1 = a.y + uy*R;
+    const x2 = b.x - ux*(R+4), y2 = b.y - uy*(R+4);
+    const isActive = visited.has(fromKey) && visited.has(toKey);
+    return (
+      <g key={fromKey+toKey}>
+        <line x1={x1} y1={y1} x2={x2} y2={y2}
+          stroke={isActive ? '#94A3B8' : '#E2E8F0'}
+          strokeWidth={isActive ? 1.5 : 1}
+          markerEnd={isActive ? 'url(#sm-arr-on)' : 'url(#sm-arr-off)'}
+        />
+      </g>
+    );
+  }
+
+  return (
+    <svg width="100%" viewBox={`0 0 ${W} ${H}`} style={{ display: 'block', overflow: 'visible' }}>
+      <defs>
+        <marker id="sm-arr-on"  markerWidth="6" markerHeight="6" refX="5" refY="3" orient="auto">
+          <path d="M0,0 L0,6 L6,3 z" fill="#94A3B8" />
+        </marker>
+        <marker id="sm-arr-off" markerWidth="6" markerHeight="6" refX="5" refY="3" orient="auto">
+          <path d="M0,0 L0,6 L6,3 z" fill="#E2E8F0" />
+        </marker>
+      </defs>
+      {SM_EDGES.map(([a, b]) => arrow(a, b))}
+      {Object.entries(SM_STATES).map(([key, st]) => {
+        const isCurrent = key === currentStatus;
+        const wasVisited = visited.has(key);
+        return (
+          <g key={key} transform={`translate(${st.x},${st.y})`}>
+            {isCurrent && <circle r={R+6} fill="none" stroke={st.stroke} strokeWidth={1.5} strokeOpacity={0.3} strokeDasharray="4 3" />}
+            <circle r={R}
+              fill={wasVisited ? st.fill : '#FAFAFA'}
+              stroke={wasVisited ? st.stroke : '#E2E8F0'}
+              strokeWidth={isCurrent ? 2.5 : 1.5}
+            />
+            <text textAnchor="middle" dy="0.35em"
+              fill={wasVisited ? st.text : '#CCCCCC'}
+              fontSize={9} fontFamily="'JetBrains Mono', monospace"
+              style={{ userSelect: 'none' }}>
+              {st.label}
+            </text>
+          </g>
+        );
+      })}
+    </svg>
+  );
+}
+
+// ── Task Window ───────────────────────────────────────────────────────────────
+function TaskWindow({ taskId, initialTask, onClose, offsetIndex }) {
+  const [task, setTask] = useState(initialTask);
+  const [pos, setPos] = useState({ x: 120 + offsetIndex * 24, y: 100 + offsetIndex * 24 });
+  const [dragging, setDragging] = useState(false);
+  const [dragOffset, setDragOffset] = useState({ x: 0, y: 0 });
+
+  async function refresh() {
+    try {
+      const r = await fetch(`/api/task/${taskId}`);
+      const d = await r.json();
+      if (d.task) setTask(d.task);
+    } catch {}
+  }
+
+  async function transition(to) {
+    await fetch(`/api/task/${taskId}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ to }),
+    });
+    refresh();
+  }
+
+  useEffect(() => { refresh(); const t = setInterval(refresh, 6000); return () => clearInterval(t); }, [taskId]);
+
+  useEffect(() => {
+    if (!dragging) return;
+    const onMove = e => setPos({ x: e.clientX - dragOffset.x, y: e.clientY - dragOffset.y });
+    const onUp = () => setDragging(false);
+    window.addEventListener('mousemove', onMove);
+    window.addEventListener('mouseup', onUp);
+    return () => { window.removeEventListener('mousemove', onMove); window.removeEventListener('mouseup', onUp); };
+  }, [dragging, dragOffset]);
+
+  const onDragStart = e => { setDragging(true); setDragOffset({ x: e.clientX - pos.x, y: e.clientY - pos.y }); e.preventDefault(); };
+
+  const statusColor = { pending: '#D97706', assigned: '#2563EB', done: '#16A34A', failed: '#DC2626', cancelled: '#94A3B8' };
+  const sc = statusColor[task?.status] || '#888';
+  const transitions = task?.transitions || [];
+
+  const canCancel = task && ['pending','assigned'].includes(task.status);
+  const canRetry  = task && ['failed','cancelled'].includes(task.status);
+  const canFail   = task && task.status === 'assigned';
+
+  return (
+    <div style={{
+      position: 'fixed', left: pos.x, top: pos.y, zIndex: 999, width: 540,
+      background: T.card, border: T.border, borderRadius: '4px',
+      boxShadow: '0 16px 60px rgba(0,0,0,0.14)', userSelect: 'none',
+    }}>
+      {/* Title bar */}
+      <div onMouseDown={onDragStart} style={{
+        display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+        padding: '0.5rem 0.75rem', borderBottom: T.border,
+        cursor: dragging ? 'grabbing' : 'grab', background: T.bg, borderRadius: '4px 4px 0 0',
+      }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+          <span style={{ width: 8, height: 8, borderRadius: '50%', background: sc, display: 'inline-block', flexShrink: 0 }} />
+          <span style={{ fontFamily: T.mono, fontSize: '0.72rem', color: T.muted }}>task · {taskId?.slice(-8)}</span>
+        </div>
+        <button onMouseDown={e => e.stopPropagation()} onClick={onClose}
+          style={{ background: 'none', border: 'none', color: T.muted, cursor: 'pointer', fontSize: '1.1rem', lineHeight: 1, padding: '0 2px' }}>
+          ×
+        </button>
+      </div>
+
+      <div style={{ padding: '1rem' }}>
+        {/* Description */}
+        <div style={{ fontFamily: T.ui, fontSize: '0.95rem', fontWeight: 500, marginBottom: '0.35rem' }}>
+          {task?.description || '…'}
+        </div>
+        <div style={{ fontFamily: T.mono, fontSize: '0.7rem', color: T.muted, marginBottom: '1.25rem' }}>
+          {task?.worker && <span style={{ marginRight: '1rem' }}>worker: {task.worker}</span>}
+          {task?.created_at && <span>created: {task.created_at.slice(0,19).replace('T',' ')}</span>}
+        </div>
+
+        {/* State machine graph */}
+        <div style={{ marginBottom: '1.25rem' }}>
+          <div style={S.sectionTitle}>State Machine</div>
+          <StateMachineGraph currentStatus={task?.status} transitions={transitions} />
+        </div>
+
+        {/* Transition timeline */}
+        {transitions.length > 0 && (
+          <div style={{ marginBottom: '1.25rem' }}>
+            <div style={S.sectionTitle}>History</div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.35rem' }}>
+              {transitions.map((tr, i) => (
+                <div key={i} style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', fontFamily: T.mono, fontSize: '0.7rem' }}>
+                  <span style={{ color: 'rgba(0,0,0,0.25)', width: 60, flexShrink: 0 }}>{tr.at?.slice(11,19)}</span>
+                  <span style={{ color: tr.from ? (statusColor[tr.from]||T.muted) : 'rgba(0,0,0,0.2)' }}>{tr.from||'—'}</span>
+                  <span style={{ color: 'rgba(0,0,0,0.25)' }}>→</span>
+                  <span style={{ color: statusColor[tr.to]||T.muted, fontWeight: 600 }}>{tr.to}</span>
+                  {tr.worker && <span style={{ color: 'rgba(0,0,0,0.3)' }}>via {tr.worker}</span>}
+                  {tr.note && <span style={{ color: T.muted }}>{tr.note}</span>}
+                  {tr.manual && <span style={{ background: '#FEF3C7', color: '#78350F', padding: '0px 4px', borderRadius: '2px', fontSize: '0.62rem' }}>manual</span>}
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* Actions */}
+        <div style={{ display: 'flex', gap: '0.5rem', borderTop: T.border, paddingTop: '0.75rem' }}>
+          {canRetry  && <button style={S.btn} onClick={() => transition('pending')}>↺ retry</button>}
+          {canFail   && <button style={{ ...S.btnGhost, color: T.red, borderColor: T.red+'44' }} onClick={() => transition('failed')}>mark failed</button>}
+          {canCancel && <button style={S.btnGhost} onClick={() => transition('cancelled')}>cancel</button>}
+          <button style={{ ...S.btnGhost, marginLeft: 'auto' }} onClick={refresh}>↺</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ── Workers Tab ───────────────────────────────────────────────────────────────
 function WorkersTab({ workers }) {
   const [tasks, setTasks] = useState([]);
@@ -189,6 +380,7 @@ function WorkersTab({ workers }) {
   const [hover, setHover] = useState(null);
   const [hoverTs, setHoverTs] = useState({});
   const [openDesktops, setOpenDesktops] = useState([]);
+  const [openTaskWindows, setOpenTaskWindows] = useState([]);
   const [ts, setTs] = useState('');
 
   async function fetchTasks() {
@@ -207,6 +399,11 @@ function WorkersTab({ workers }) {
   function closeDesktop(id) { setOpenDesktops(prev => prev.filter(w => w.id !== id)); }
   function handleCardEnter(workerId) { setHover(workerId); setHoverTs(prev => ({ ...prev, [workerId]: Date.now() })); }
 
+  function openTaskWindow(task) {
+    setOpenTaskWindows(prev => prev.find(t => t.id === task.id) ? prev : [...prev, task]);
+  }
+  function closeTaskWindow(id) { setOpenTaskWindows(prev => prev.filter(t => t.id !== id)); }
+
   async function addTask() {
     if (!newTask.trim()) return;
     await fetch('/api/task', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ description: newTask }) });
@@ -216,6 +413,9 @@ function WorkersTab({ workers }) {
   return (
     <div>
       {openDesktops.map(w => <DesktopWindow key={w.id} worker={w} onClose={() => closeDesktop(w.id)} />)}
+      {openTaskWindows.map((t, i) => (
+        <TaskWindow key={t.id} taskId={t.id} initialTask={t} onClose={() => closeTaskWindow(t.id)} offsetIndex={i} />
+      ))}
 
       <div style={S.section}>
         <div style={S.sectionTitle}>Workers ({workers.length}/4) · {ts}</div>
@@ -302,7 +502,10 @@ function WorkersTab({ workers }) {
       </div>
 
       <div style={S.section}>
-        <div style={S.sectionTitle}>Task Log ({tasks.length})</div>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.75rem' }}>
+          <div style={S.sectionTitle}>Task Log ({tasks.length})</div>
+          <span style={{ fontFamily: T.mono, fontSize: '0.6rem', color: 'rgba(0,0,0,0.25)' }}>click row to inspect</span>
+        </div>
         <div style={{ ...S.card, padding: 0, overflow: 'hidden' }}>
           <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.78rem', fontFamily: T.mono }}>
             <thead>
@@ -313,19 +516,28 @@ function WorkersTab({ workers }) {
               </tr>
             </thead>
             <tbody>
-              {tasks.slice(0,50).map(t => (
-                <tr key={t.id} style={{ borderBottom: T.border }}>
-                  <td style={{ padding: '0.45rem 0.75rem', color: 'rgba(0,0,0,0.25)' }}>{t.id.slice(-6)}</td>
-                  <td style={{ padding: '0.45rem 0.75rem' }}>{t.description}</td>
-                  <td style={{ padding: '0.45rem 0.75rem' }}>
-                    <span style={{ color: t.status==='done' ? T.mint : t.status==='assigned' ? T.orange : T.muted }}>
-                      {t.status}
-                    </span>
-                  </td>
-                  <td style={{ padding: '0.45rem 0.75rem', color: T.muted }}>{t.worker||'—'}</td>
-                  <td style={{ padding: '0.45rem 0.75rem', color: 'rgba(0,0,0,0.3)' }}>{t.created_at?.slice(11,19)}</td>
-                </tr>
-              ))}
+              {tasks.slice(0,50).map(t => {
+                const isOpen = openTaskWindows.some(w => w.id === t.id);
+                const stColor = { done: T.mint, assigned: '#2563EB', failed: T.red, cancelled: T.muted, pending: T.orange };
+                return (
+                  <tr key={t.id}
+                    onClick={() => openTaskWindow(t)}
+                    style={{ borderBottom: T.border, cursor: 'pointer', background: isOpen ? '#F0F9FF' : undefined, transition: 'background 0.1s' }}
+                    onMouseEnter={e => { if (!isOpen) e.currentTarget.style.background = T.bg; }}
+                    onMouseLeave={e => { e.currentTarget.style.background = isOpen ? '#F0F9FF' : ''; }}>
+                    <td style={{ padding: '0.45rem 0.75rem', color: 'rgba(0,0,0,0.25)' }}>{t.id.slice(-6)}</td>
+                    <td style={{ padding: '0.45rem 0.75rem' }}>{t.description}</td>
+                    <td style={{ padding: '0.45rem 0.75rem' }}>
+                      <span style={{ display: 'inline-flex', alignItems: 'center', gap: '0.35rem' }}>
+                        <span style={{ width: 6, height: 6, borderRadius: '50%', background: stColor[t.status]||T.muted, display: 'inline-block' }} />
+                        <span style={{ color: stColor[t.status]||T.muted }}>{t.status}</span>
+                      </span>
+                    </td>
+                    <td style={{ padding: '0.45rem 0.75rem', color: T.muted }}>{t.worker||'—'}</td>
+                    <td style={{ padding: '0.45rem 0.75rem', color: 'rgba(0,0,0,0.3)' }}>{t.created_at?.slice(11,19)}</td>
+                  </tr>
+                );
+              })}
             </tbody>
           </table>
           {!tasks.length && <div style={{ color: 'rgba(0,0,0,0.2)', padding: '1rem 0.75rem', fontFamily: T.mono, fontSize: '0.78rem' }}>No tasks yet.</div>}
