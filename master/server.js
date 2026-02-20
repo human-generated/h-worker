@@ -26,17 +26,23 @@ app.post('/worker/heartbeat', (req, res) => {
   res.json({ ok: true });
 });
 
-// Get next pending task for a worker
+// Get next pending task for a worker (respects assigned_worker field)
 app.get('/worker/task/:id', (req, res) => {
+  const workerId = req.params.id;
   const s = loadState();
-  const pending = s.tasks.find(t => t.status === 'pending');
-  if (pending) {
-    pushTransition(pending, 'assigned', { worker: req.params.id });
-    pending.status = 'assigned';
-    pending.worker = req.params.id;
-    pending.assigned_at = new Date().toISOString();
+
+  // Prefer tasks explicitly assigned to this worker, then unassigned pending tasks
+  const task =
+    s.tasks.find(t => t.status === 'pending' && t.assigned_worker === workerId) ||
+    s.tasks.find(t => t.status === 'pending' && !t.assigned_worker);
+
+  if (task) {
+    pushTransition(task, 'running', { worker: workerId });
+    task.status = 'running';
+    task.worker = workerId;
+    task.assigned_at = new Date().toISOString();
     saveState(s);
-    return res.json({ task: pending });
+    return res.json({ task });
   }
   res.json({ task: null });
 });
@@ -63,14 +69,13 @@ app.get('/task/:id', (req, res) => {
   res.json({ task });
 });
 
-// Manual state transition (cancel, fail, retry)
+// Freeform state transition — any state string is valid
 app.post('/task/:id/state', (req, res) => {
   const s = loadState();
   const task = s.tasks.find(t => t.id === req.params.id);
   if (!task) return res.status(404).json({ error: 'not found' });
   const { to, note } = req.body;
-  const valid = ['pending', 'cancelled', 'failed', 'done'];
-  if (!valid.includes(to)) return res.status(400).json({ error: 'invalid state: ' + to });
+  if (!to || typeof to !== 'string') return res.status(400).json({ error: 'to is required' });
   pushTransition(task, to, { note: note || null, manual: true });
   task.status = to;
   task[to + '_at'] = new Date().toISOString();
@@ -84,16 +89,16 @@ app.get('/status', (req, res) => {
   res.json(loadState());
 });
 
-// Add task
+// Add task — starts in 'queued' state for orchestrator to pick up
 app.post('/task', (req, res) => {
   const s = loadState();
   const now = new Date().toISOString();
   const task = {
     id: Date.now().toString(),
     ...req.body,
-    status: 'pending',
+    status: req.body.status || 'queued',
     created_at: now,
-    transitions: [{ from: null, to: 'pending', at: now }],
+    transitions: [{ from: null, to: req.body.status || 'queued', at: now }],
   };
   s.tasks.push(task);
   saveState(s);
@@ -101,12 +106,12 @@ app.post('/task', (req, res) => {
 });
 
 // Linear token storage
-const LINEAR_TOKEN_FILE = "/opt/hw-master/linear_token.json";
-app.get("/config/linear-token", (req, res) => {
-  try { res.json(JSON.parse(fs.readFileSync(LINEAR_TOKEN_FILE, "utf8"))); }
+const LINEAR_TOKEN_FILE = '/opt/hw-master/linear_token.json';
+app.get('/config/linear-token', (req, res) => {
+  try { res.json(JSON.parse(fs.readFileSync(LINEAR_TOKEN_FILE, 'utf8'))); }
   catch { res.json({ token: null }); }
 });
-app.post("/config/linear-token", (req, res) => {
+app.post('/config/linear-token', (req, res) => {
   fs.writeFileSync(LINEAR_TOKEN_FILE, JSON.stringify({ token: req.body.token }));
   res.json({ ok: true });
 });
@@ -146,10 +151,39 @@ app.get('/nfs', (req, res) => {
       });
       res.json({ type: 'dir', path: rel || '/', entries });
     } else {
-      const content = fs.readFileSync(abs, 'utf8');
-      res.json({ type: 'file', path: rel, content });
+      // Text files: return content; binary: return metadata only
+      const ext = path.extname(abs).toLowerCase();
+      const binaryExts = new Set(['.mp4','.webm','.avi','.mov','.png','.jpg','.jpeg','.gif','.webp','.pdf','.zip','.tar','.gz']);
+      if (binaryExts.has(ext)) {
+        const s = fs.statSync(abs);
+        res.json({ type: 'file', path: rel, binary: true, size: s.size, ext });
+      } else {
+        const content = fs.readFileSync(abs, 'utf8');
+        res.json({ type: 'file', path: rel, content });
+      }
     }
   } catch(e) { res.status(400).json({ error: e.message }); }
+});
+
+// NFS binary file download/stream
+app.get('/nfs/file', (req, res) => {
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  const rel = (req.query.path || '').replace(/\.\./g, '');
+  const abs = path.join(NFS_ROOT, rel);
+  if (!fs.existsSync(abs)) return res.status(404).json({ error: 'not found' });
+  const name = path.basename(abs);
+  const ext = path.extname(abs).toLowerCase();
+  const mimes = {
+    '.mp4':'video/mp4','.webm':'video/webm','.avi':'video/x-msvideo','.mov':'video/quicktime',
+    '.png':'image/png','.jpg':'image/jpeg','.jpeg':'image/jpeg','.gif':'image/gif','.webp':'image/webp',
+    '.pdf':'application/pdf','.zip':'application/zip',
+    '.json':'application/json','.sh':'text/plain','.js':'text/javascript','.html':'text/html',
+    '.txt':'text/plain','.log':'text/plain','.md':'text/plain',
+  };
+  const mime = mimes[ext] || 'application/octet-stream';
+  res.setHeader('Content-Type', mime);
+  res.setHeader('Content-Disposition', `inline; filename="${name}"`);
+  fs.createReadStream(abs).pipe(res);
 });
 
 // Skills API

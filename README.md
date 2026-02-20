@@ -1,27 +1,43 @@
 # H Worker
 
-Multi-agent worker system: 1 master + 4 OpenClaw/Claude workers on DigitalOcean, with Telegram bot management and a Vercel dashboard.
+Multi-agent worker fleet: 1 master + N OpenClaw/Claude workers on DigitalOcean, with Claude-powered task orchestration, Telegram coordination, and a Vercel dashboard.
 
 ## Architecture
 
 ```
-Telegram (@h_worker_1_bot)
-        │
-        ▼
-   hw-master (159.65.205.244)
-   ├── Master API :3000
-   ├── Task queue (NFS-backed)
-   └── Vercel deploy trigger
-        │
-        ├── hw-worker-1 (164.90.197.224)
-        ├── hw-worker-2 (167.99.222.95)
-        ├── hw-worker-3 (178.128.247.39)
-        └── hw-worker-4 (142.93.131.96)
-             Each worker runs:
-             ├── OpenClaw (Telegram AI gateway)
-             ├── Claude supervisor (auto-restart + heartbeat)
-             ├── Xvfb + x11vnc (virtual desktop)
-             └── noVNC :6080 (web desktop stream)
+┌─────────────────────────────────────────────────────────┐
+│  Vercel Dashboard  (hw-dashboard.vercel.app)            │
+│  Workers · Tasks · State Machine · Skills · NFS         │
+└────────────────────────┬────────────────────────────────┘
+                         │ REST API
+┌────────────────────────▼────────────────────────────────┐
+│  Master  (159.65.205.244)  :3000                        │
+│  server.js     — task queue, worker registry, NFS API   │
+│  orchestrator.js — Claude-powered planner (Haiku)       │
+│  /mnt/shared   — NFS volume shared with all workers     │
+└────┬──────────────┬──────────────┬──────────────┬───────┘
+     │ NFS + tasks  │              │              │
+┌────▼──┐      ┌────▼──┐     ┌────▼──┐      ┌────▼──┐
+│ w-1   │      │ w-2   │     │ w-3   │      │ w-4   │
+│OpenClaw│     │OpenClaw│    │OpenClaw│     │OpenClaw│
+│XFCE   │      │XFCE   │     │XFCE   │      │XFCE   │
+│:6080  │      │:6080  │     │:6080  │      │:6080  │
+└───────┘      └───────┘     └───────┘      └───────┘
+```
+
+Each worker runs: OpenClaw (AI gateway) · XFCE4 desktop · Xvfb · x11vnc · noVNC :6080 · hw-supervisor
+
+## Repo Structure
+
+```
+deploy.sh                  — provision any droplet (worker or master)
+master/
+  server.js                — Express API: tasks, workers, NFS, skills
+  orchestrator.js          — Claude Haiku task planner
+scripts/
+  claude_supervisor.sh     — Worker: heartbeat + task execution
+dashboard/
+  app/                     — Next.js 14 dashboard (Vercel)
 ```
 
 ## Shared Telegram Group
@@ -53,15 +69,55 @@ TELEGRAM_API_ID=...
 TELEGRAM_API_HASH=...
 ```
 
-## Re-deploy
-```bash
-# Full redeploy from scratch
-bash master/setup.sh          # on hw-master
-bash worker/setup.sh <id> <master-ip>   # on each worker
+## Deploying a new worker
 
-# Dashboard (from master)
+```bash
+# 1. Create Ubuntu 22.04 droplet on DigitalOcean, attach shared NFS volume
+# 2. SSH in as root and run:
+curl -fsSL https://raw.githubusercontent.com/human-generated/h-worker/main/deploy.sh | bash -s -- \
+  worker \
+  hw-worker-5 \
+  159.65.205.244 \
+  -5166727984 \
+  "BOT_TOKEN" \
+  "sk-ant-..." \
+  "10.110.0.2:/33522846/743ca995-39f8-4f2e-ac0f-0759278f1dd4 /mnt/shared"
+```
+
+## Deploying the master
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/human-generated/h-worker/main/deploy.sh | bash -s -- \
+  master \
+  "vcp_..." \
+  blckchnhmns \
+  "sk-ant-..." \
+  "10.110.0.2:/33522846/743ca995-39f8-4f2e-ac0f-0759278f1dd4 /mnt/shared"
+```
+
+## Submitting a task
+
+```bash
+# Tasks start as 'queued' — the orchestrator plans and assigns them automatically
+curl -X POST http://159.65.205.244:3000/task \
+  -H 'Content-Type: application/json' \
+  -d '{"title":"My Task","type":"render","description":"...","extra":{}}'
+```
+
+## Task lifecycle
+
+```
+queued → planning → assigning → [task-specific states] → done
+                                                       ↘ failed
+                                                       ↘ cancelled
+```
+
+States are freeform strings reported by worker scripts (e.g. `installing_chromium → capturing_frames → encoding_video`).
+
+## Re-deploy dashboard
+
+```bash
 curl -X POST http://159.65.205.244:3000/deploy/dashboard
-# or via Telegram: /redeploy
 ```
 
 ## NFS Storage
