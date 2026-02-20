@@ -182,79 +182,101 @@ function DesktopWindow({ worker, onClose }) {
   );
 }
 
-// ── State Machine Graph ───────────────────────────────────────────────────────
-const SM_STATES = {
-  pending:   { label: 'pending',   x: 80,  y: 60,  fill: '#FEF3C7', stroke: '#D97706', text: '#78350F' },
-  assigned:  { label: 'assigned',  x: 250, y: 60,  fill: '#DBEAFE', stroke: '#2563EB', text: '#1E3A8A' },
-  done:      { label: 'done',      x: 420, y: 60,  fill: '#DCFCE7', stroke: '#16A34A', text: '#14532D' },
-  failed:    { label: 'failed',    x: 250, y: 150, fill: '#FEE2E2', stroke: '#DC2626', text: '#7F1D1D' },
-  cancelled: { label: 'cancelled', x: 80,  y: 150, fill: '#F1F5F9', stroke: '#94A3B8', text: '#475569' },
-};
-const SM_EDGES = [
-  ['pending', 'assigned'],
-  ['assigned', 'done'],
-  ['assigned', 'failed'],
-  ['pending', 'cancelled'],
-  ['assigned', 'cancelled'],
-];
+// ── Dynamic State Machine Graph ───────────────────────────────────────────────
+function stateTheme(state) {
+  if (!state) return { fill: '#F1F5F9', stroke: '#CBD5E1', text: '#94A3B8' };
+  const s = state.toLowerCase();
+  if (s === 'done')                            return { fill: '#DCFCE7', stroke: '#16A34A', text: '#14532D' };
+  if (s === 'failed' || s === 'error')         return { fill: '#FEE2E2', stroke: '#DC2626', text: '#7F1D1D' };
+  if (s === 'cancelled' || s === 'canceled')   return { fill: '#F1F5F9', stroke: '#94A3B8', text: '#475569' };
+  if (s === 'queued' || s === 'pending')       return { fill: '#FEF3C7', stroke: '#D97706', text: '#78350F' };
+  if (s === 'planning' || s === 'assigning')   return { fill: '#EDE9FE', stroke: '#7C3AED', text: '#5B21B6' };
+  return { fill: '#DBEAFE', stroke: '#2563EB', text: '#1E3A8A' };
+}
 
 function StateMachineGraph({ currentStatus, transitions = [] }) {
-  const W = 520, H = 210, R = 34;
-  const visited = new Set(transitions.map(t => t.to));
-  if (currentStatus) visited.add(currentStatus);
+  // Build ordered unique state list from transitions history
+  const seen = new Set();
+  const ordered = [];
+  for (const tr of transitions) {
+    if (tr.from && !seen.has(tr.from)) { seen.add(tr.from); ordered.push(tr.from); }
+    if (tr.to   && !seen.has(tr.to))   { seen.add(tr.to);   ordered.push(tr.to);   }
+  }
+  if (currentStatus && !seen.has(currentStatus)) ordered.push(currentStatus);
+  if (!ordered.length) ordered.push(currentStatus || 'queued');
 
-  function arrow(fromKey, toKey) {
-    const a = SM_STATES[fromKey], b = SM_STATES[toKey];
+  // Build edge list from transitions (from→to pairs, deduped)
+  const edgeSet = new Set();
+  const edges = [];
+  for (const tr of transitions) {
+    if (tr.from && tr.to) {
+      const key = `${tr.from}→${tr.to}`;
+      if (!edgeSet.has(key)) { edgeSet.add(key); edges.push([tr.from, tr.to]); }
+    }
+  }
+
+  const R = 26;
+  const SPACING = 110;
+  const W = Math.max(480, ordered.length * SPACING + 60);
+  const H = 110;
+
+  // Position: horizontal timeline
+  const pos = {};
+  ordered.forEach((s, i) => { pos[s] = { x: 40 + i * SPACING, y: 55 }; });
+
+  function arrow(from, to) {
+    const a = pos[from], b = pos[to];
     if (!a || !b) return null;
     const dx = b.x - a.x, dy = b.y - a.y;
-    const len = Math.sqrt(dx*dx + dy*dy);
-    const ux = dx/len, uy = dy/len;
-    const x1 = a.x + ux*R, y1 = a.y + uy*R;
-    const x2 = b.x - ux*(R+4), y2 = b.y - uy*(R+4);
-    const isActive = visited.has(fromKey) && visited.has(toKey);
+    const len = Math.sqrt(dx*dx + dy*dy) || 1;
+    const x1 = a.x + (dx/len)*R, y1 = a.y + (dy/len)*R;
+    const x2 = b.x - (dx/len)*(R+5), y2 = b.y - (dy/len)*(R+5);
+    const th = stateTheme(to);
     return (
-      <g key={fromKey+toKey}>
-        <line x1={x1} y1={y1} x2={x2} y2={y2}
-          stroke={isActive ? '#94A3B8' : '#E2E8F0'}
-          strokeWidth={isActive ? 1.5 : 1}
-          markerEnd={isActive ? 'url(#sm-arr-on)' : 'url(#sm-arr-off)'}
-        />
-      </g>
+      <line key={from+to} x1={x1} y1={y1} x2={x2} y2={y2}
+        stroke={th.stroke} strokeWidth={1.5} strokeOpacity={0.6}
+        markerEnd={`url(#sm-arr-${to.replace(/[^a-z0-9]/g,'')})`} />
     );
   }
 
   return (
-    <svg width="100%" viewBox={`0 0 ${W} ${H}`} style={{ display: 'block', overflow: 'visible' }}>
-      <defs>
-        <marker id="sm-arr-on"  markerWidth="6" markerHeight="6" refX="5" refY="3" orient="auto">
-          <path d="M0,0 L0,6 L6,3 z" fill="#94A3B8" />
-        </marker>
-        <marker id="sm-arr-off" markerWidth="6" markerHeight="6" refX="5" refY="3" orient="auto">
-          <path d="M0,0 L0,6 L6,3 z" fill="#E2E8F0" />
-        </marker>
-      </defs>
-      {SM_EDGES.map(([a, b]) => arrow(a, b))}
-      {Object.entries(SM_STATES).map(([key, st]) => {
-        const isCurrent = key === currentStatus;
-        const wasVisited = visited.has(key);
-        return (
-          <g key={key} transform={`translate(${st.x},${st.y})`}>
-            {isCurrent && <circle r={R+6} fill="none" stroke={st.stroke} strokeWidth={1.5} strokeOpacity={0.3} strokeDasharray="4 3" />}
-            <circle r={R}
-              fill={wasVisited ? st.fill : '#FAFAFA'}
-              stroke={wasVisited ? st.stroke : '#E2E8F0'}
-              strokeWidth={isCurrent ? 2.5 : 1.5}
-            />
-            <text textAnchor="middle" dy="0.35em"
-              fill={wasVisited ? st.text : '#CCCCCC'}
-              fontSize={9} fontFamily="'JetBrains Mono', monospace"
-              style={{ userSelect: 'none' }}>
-              {st.label}
-            </text>
-          </g>
-        );
-      })}
-    </svg>
+    <div style={{ overflowX: 'auto' }}>
+      <svg width={W} height={H} viewBox={`0 0 ${W} ${H}`} style={{ display: 'block', overflow: 'visible', minWidth: W }}>
+        <defs>
+          {ordered.map(s => {
+            const th = stateTheme(s);
+            const id = `sm-arr-${s.replace(/[^a-z0-9]/g,'')}`;
+            return (
+              <marker key={id} id={id} markerWidth="6" markerHeight="6" refX="5" refY="3" orient="auto">
+                <path d="M0,0 L0,6 L6,3 z" fill={th.stroke} />
+              </marker>
+            );
+          })}
+        </defs>
+
+        {edges.map(([a, b]) => arrow(a, b))}
+
+        {ordered.map(state => {
+          const p = pos[state];
+          if (!p) return null;
+          const isCurrent = state === currentStatus;
+          const th = stateTheme(state);
+          const label = state.replace(/_/g, ' ');
+          const truncated = label.length > 12 ? label.slice(0, 11) + '…' : label;
+          return (
+            <g key={state} transform={`translate(${p.x},${p.y})`}>
+              {isCurrent && <circle r={R+7} fill="none" stroke={th.stroke} strokeWidth={1.5} strokeOpacity={0.25} strokeDasharray="4 3" />}
+              <circle r={R} fill={th.fill} stroke={th.stroke} strokeWidth={isCurrent ? 2.5 : 1.5} />
+              <text textAnchor="middle" dy="0.35em" fill={th.text}
+                fontSize={8} fontFamily="'JetBrains Mono', monospace"
+                style={{ userSelect: 'none' }}>
+                {truncated}
+              </text>
+            </g>
+          );
+        })}
+      </svg>
+    </div>
   );
 }
 
@@ -295,13 +317,14 @@ function TaskWindow({ taskId, initialTask, onClose, offsetIndex }) {
 
   const onDragStart = e => { setDragging(true); setDragOffset({ x: e.clientX - pos.x, y: e.clientY - pos.y }); e.preventDefault(); };
 
-  const statusColor = { pending: '#D97706', assigned: '#2563EB', done: '#16A34A', failed: '#DC2626', cancelled: '#94A3B8' };
-  const sc = statusColor[task?.status] || '#888';
+  const sc = stateTheme(task?.status).stroke;
   const transitions = task?.transitions || [];
 
-  const canCancel = task && ['pending','assigned'].includes(task.status);
-  const canRetry  = task && ['failed','cancelled'].includes(task.status);
-  const canFail   = task && task.status === 'assigned';
+  const TERMINAL = new Set(['done','failed','cancelled','canceled','error']);
+  const isTerminal = task && TERMINAL.has(task.status);
+  const canCancel = task && !isTerminal;
+  const canRetry  = task && isTerminal;
+  const canFail   = task && !isTerminal;
 
   return (
     <div style={{
@@ -349,9 +372,9 @@ function TaskWindow({ taskId, initialTask, onClose, offsetIndex }) {
               {transitions.map((tr, i) => (
                 <div key={i} style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', fontFamily: T.mono, fontSize: '0.7rem' }}>
                   <span style={{ color: 'rgba(0,0,0,0.25)', width: 60, flexShrink: 0 }}>{tr.at?.slice(11,19)}</span>
-                  <span style={{ color: tr.from ? (statusColor[tr.from]||T.muted) : 'rgba(0,0,0,0.2)' }}>{tr.from||'—'}</span>
+                  <span style={{ color: tr.from ? stateTheme(tr.from).stroke : 'rgba(0,0,0,0.2)' }}>{tr.from||'—'}</span>
                   <span style={{ color: 'rgba(0,0,0,0.25)' }}>→</span>
-                  <span style={{ color: statusColor[tr.to]||T.muted, fontWeight: 600 }}>{tr.to}</span>
+                  <span style={{ color: stateTheme(tr.to).stroke, fontWeight: 600 }}>{tr.to}</span>
                   {tr.worker && <span style={{ color: 'rgba(0,0,0,0.3)' }}>via {tr.worker}</span>}
                   {tr.note && <span style={{ color: T.muted }}>{tr.note}</span>}
                   {tr.manual && <span style={{ background: '#FEF3C7', color: '#78350F', padding: '0px 4px', borderRadius: '2px', fontSize: '0.62rem' }}>manual</span>}
@@ -406,7 +429,7 @@ function WorkersTab({ workers }) {
 
   async function addTask() {
     if (!newTask.trim()) return;
-    await fetch('/api/task', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ description: newTask }) });
+    await fetch('/api/task', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ title: newTask, description: newTask, status: 'queued' }) });
     setNewTask(''); fetchTasks();
   }
 
@@ -518,7 +541,8 @@ function WorkersTab({ workers }) {
             <tbody>
               {tasks.slice(0,50).map(t => {
                 const isOpen = openTaskWindows.some(w => w.id === t.id);
-                const stColor = { done: T.mint, assigned: '#2563EB', failed: T.red, cancelled: T.muted, pending: T.orange };
+                const sc = stateTheme(t.status).stroke;
+                const label = t.title || t.description || '—';
                 return (
                   <tr key={t.id}
                     onClick={() => openTaskWindow(t)}
@@ -526,11 +550,14 @@ function WorkersTab({ workers }) {
                     onMouseEnter={e => { if (!isOpen) e.currentTarget.style.background = T.bg; }}
                     onMouseLeave={e => { e.currentTarget.style.background = isOpen ? '#F0F9FF' : ''; }}>
                     <td style={{ padding: '0.45rem 0.75rem', color: 'rgba(0,0,0,0.25)' }}>{t.id.slice(-6)}</td>
-                    <td style={{ padding: '0.45rem 0.75rem' }}>{t.description}</td>
+                    <td style={{ padding: '0.45rem 0.75rem', maxWidth: 280, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                      {t.parent_task && <span style={{ fontSize: '0.6rem', color: T.muted, marginRight: 4 }}>↳</span>}
+                      {label}
+                    </td>
                     <td style={{ padding: '0.45rem 0.75rem' }}>
                       <span style={{ display: 'inline-flex', alignItems: 'center', gap: '0.35rem' }}>
-                        <span style={{ width: 6, height: 6, borderRadius: '50%', background: stColor[t.status]||T.muted, display: 'inline-block' }} />
-                        <span style={{ color: stColor[t.status]||T.muted }}>{t.status}</span>
+                        <span style={{ width: 6, height: 6, borderRadius: '50%', background: sc, display: 'inline-block' }} />
+                        <span style={{ color: sc }}>{t.status}</span>
                       </span>
                     </td>
                     <td style={{ padding: '0.45rem 0.75rem', color: T.muted }}>{t.worker||'—'}</td>
@@ -548,28 +575,47 @@ function WorkersTab({ workers }) {
 }
 
 // ── NFS Tab ───────────────────────────────────────────────────────────────────
+const VIDEO_EXTS = new Set(['.mp4','.webm','.avi','.mov']);
+const IMAGE_EXTS = new Set(['.png','.jpg','.jpeg','.gif','.webp']);
+
+function fileIcon(name) {
+  const ext = (name.match(/\.[^.]+$/) || [''])[0].toLowerCase();
+  if (VIDEO_EXTS.has(ext)) return '🎬';
+  if (IMAGE_EXTS.has(ext)) return '🖼';
+  if (['.sh','.js','.py','.json'].includes(ext)) return '⌨';
+  if (['.log','.txt','.md'].includes(ext)) return '📝';
+  return '📄';
+}
+
 function NFSTab() {
-  const [path, setPath] = useState('');
+  const [nfsPath, setNfsPath] = useState('');
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(false);
 
   async function load(p) {
     setLoading(true);
-    const r = await fetch(`/api/nfs?path=${encodeURIComponent(p)}`);
-    const d = await r.json();
-    setData(d); setPath(p); setLoading(false);
+    try {
+      const r = await fetch(`/api/nfs?path=${encodeURIComponent(p)}`);
+      const d = await r.json();
+      setData(d); setNfsPath(p);
+    } catch(e) { setData({ error: e.message }); }
+    setLoading(false);
   }
 
   useEffect(() => { load(''); }, []);
-  const parts = path.split('/').filter(Boolean);
+  const parts = nfsPath.split('/').filter(Boolean);
+  const fileName = parts[parts.length - 1] || '';
+  const fileUrl = `/api/nfs/file?path=${encodeURIComponent(nfsPath)}`;
+  const ext = (fileName.match(/\.[^.]+$/) || [''])[0].toLowerCase();
 
   return (
     <div>
-      <div style={{ marginBottom: '1rem', fontSize: '0.78rem', fontFamily: T.mono, color: T.muted }}>
+      {/* Breadcrumb */}
+      <div style={{ marginBottom: '1rem', fontSize: '0.78rem', fontFamily: T.mono, color: T.muted, display: 'flex', alignItems: 'center', gap: 0 }}>
         <span style={{ cursor: 'pointer', color: T.text }} onClick={() => load('')}>/mnt/shared</span>
         {parts.map((p, i) => (
           <span key={i}>
-            <span style={{ margin: '0 0.25rem', color: 'rgba(0,0,0,0.2)' }}>/</span>
+            <span style={{ margin: '0 0.2rem', color: 'rgba(0,0,0,0.2)' }}>/</span>
             <span style={{ cursor: 'pointer', color: T.text }} onClick={() => load(parts.slice(0,i+1).join('/'))}>{p}</span>
           </span>
         ))}
@@ -578,34 +624,83 @@ function NFSTab() {
       {loading && <div style={{ color: T.muted, fontFamily: T.mono, fontSize: '0.78rem' }}>loading...</div>}
       {data?.error && <div style={{ color: T.red, fontFamily: T.mono, fontSize: '0.78rem' }}>Error: {data.error}</div>}
 
+      {/* Directory listing */}
       {data?.type === 'dir' && (
         <div style={{ ...S.card, padding: 0, overflow: 'hidden' }}>
-          {path && (
+          {nfsPath && (
             <div style={{ padding: '0.45rem 0.75rem', cursor: 'pointer', color: T.muted, borderBottom: T.border, fontFamily: T.mono, fontSize: '0.78rem' }}
               onClick={() => load(parts.slice(0,-1).join('/'))}>📁 ..</div>
           )}
           {!data.entries?.length && <div style={{ color: 'rgba(0,0,0,0.25)', padding: '0.75rem', fontFamily: T.mono, fontSize: '0.78rem' }}>Empty directory</div>}
-          {data.entries?.map(e => (
-            <div key={e.name} style={{ padding: '0.45rem 0.75rem', cursor: 'pointer', borderBottom: T.border, display: 'flex', gap: '0.5rem', alignItems: 'center', transition: 'background 0.1s' }}
-              onClick={() => load(path ? `${path}/${e.name}` : e.name)}
-              onMouseEnter={ev => ev.currentTarget.style.background = T.bg}
-              onMouseLeave={ev => ev.currentTarget.style.background = ''}>
-              <span style={{ fontSize: '0.85rem' }}>{e.type === 'dir' ? '📁' : '📄'}</span>
-              <span style={{ fontFamily: T.mono, fontSize: '0.78rem', color: e.type === 'dir' ? T.text : T.text }}>{e.name}</span>
-              {e.type === 'file' && <span style={{ color: T.muted, fontSize: '0.68rem', marginLeft: 'auto', fontFamily: T.mono }}>{(e.size/1024).toFixed(1)}kb</span>}
-              <span style={{ color: 'rgba(0,0,0,0.2)', fontSize: '0.68rem', marginLeft: 'auto', fontFamily: T.mono }}>{new Date(e.modified).toLocaleDateString()}</span>
-            </div>
-          ))}
+          {data.entries?.map(e => {
+            const filePath = nfsPath ? `${nfsPath}/${e.name}` : e.name;
+            const fUrl = `/api/nfs/file?path=${encodeURIComponent(filePath)}`;
+            const fExt = (e.name.match(/\.[^.]+$/) || [''])[0].toLowerCase();
+            const isMedia = VIDEO_EXTS.has(fExt) || IMAGE_EXTS.has(fExt);
+            return (
+              <div key={e.name} style={{ padding: '0.45rem 0.75rem', borderBottom: T.border, display: 'flex', gap: '0.5rem', alignItems: 'center', transition: 'background 0.1s' }}
+                onMouseEnter={ev => ev.currentTarget.style.background = T.bg}
+                onMouseLeave={ev => ev.currentTarget.style.background = ''}>
+                <span style={{ fontSize: '0.85rem', cursor: e.type === 'dir' ? 'pointer' : 'default' }}
+                  onClick={() => e.type === 'dir' && load(filePath)}>
+                  {e.type === 'dir' ? '📁' : fileIcon(e.name)}
+                </span>
+                <span style={{ fontFamily: T.mono, fontSize: '0.78rem', cursor: e.type === 'dir' ? 'pointer' : 'default', flex: 1 }}
+                  onClick={() => e.type === 'dir' ? load(filePath) : load(filePath)}>
+                  {e.name}
+                </span>
+                {e.type === 'file' && (
+                  <span style={{ color: 'rgba(0,0,0,0.2)', fontSize: '0.68rem', fontFamily: T.mono, flexShrink: 0 }}>
+                    {e.size > 1048576 ? (e.size/1048576).toFixed(1)+'mb' : (e.size/1024).toFixed(1)+'kb'}
+                  </span>
+                )}
+                {e.type === 'file' && isMedia && (
+                  <a href={fUrl} target="_blank" rel="noreferrer" download={e.name}
+                    onClick={ev => ev.stopPropagation()}
+                    style={{ color: T.muted, fontSize: '0.7rem', fontFamily: T.mono, textDecoration: 'none', background: T.bg, border: T.border, borderRadius: T.radius, padding: '1px 6px', flexShrink: 0 }}>
+                    ↓
+                  </a>
+                )}
+              </div>
+            );
+          })}
         </div>
       )}
 
+      {/* File view */}
       {data?.type === 'file' && (
         <div>
-          <div style={{ marginBottom: '0.5rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-            <span style={{ fontFamily: T.mono, fontSize: '0.78rem', color: T.muted }}>{parts[parts.length-1]}</span>
-            <button style={S.btnGhost} onClick={() => load(parts.slice(0,-1).join('/'))}>← back</button>
+          <div style={{ marginBottom: '0.75rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '0.75rem' }}>
+            <span style={{ fontFamily: T.mono, fontSize: '0.78rem', color: T.muted }}>{fileName}</span>
+            <div style={{ display: 'flex', gap: '0.5rem' }}>
+              <a href={fileUrl} download={fileName} target="_blank" rel="noreferrer"
+                style={{ ...S.btnGhost, textDecoration: 'none', fontSize: '0.7rem' }}>↓ download</a>
+              <button style={S.btnGhost} onClick={() => load(parts.slice(0,-1).join('/'))}>← back</button>
+            </div>
           </div>
-          <div style={S.code}>{data.content}</div>
+
+          {/* Binary: image */}
+          {data.binary && IMAGE_EXTS.has(ext) && (
+            <img src={fileUrl} alt={fileName}
+              style={{ maxWidth: '100%', borderRadius: T.radius, border: T.border, display: 'block' }} />
+          )}
+
+          {/* Binary: video */}
+          {data.binary && VIDEO_EXTS.has(ext) && (
+            <video controls style={{ maxWidth: '100%', borderRadius: T.radius, background: '#000', display: 'block' }}>
+              <source src={fileUrl} />
+            </video>
+          )}
+
+          {/* Binary: other */}
+          {data.binary && !IMAGE_EXTS.has(ext) && !VIDEO_EXTS.has(ext) && (
+            <div style={{ ...S.card, color: T.muted, textAlign: 'center', padding: '2rem', fontFamily: T.mono, fontSize: '0.78rem' }}>
+              Binary file · {data.size ? ((data.size/1024).toFixed(1) + 'kb') : ''}
+            </div>
+          )}
+
+          {/* Text content */}
+          {!data.binary && <div style={S.code}>{data.content}</div>}
         </div>
       )}
     </div>
