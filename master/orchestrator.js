@@ -80,7 +80,210 @@ function builtinPlan(task, artifactDir, workerList) {
     const outVideo = `${aDir}/output.mp4`;
     const TG_TOKEN = '8202032261:AAFiptoYDpznIbnSvyjPrftsyteVMXcFUz8';
     const TG_CHAT  = '-5166727984';
+    const elevenlabsKey = extra.elevenlabs_key || '';
+    const voiceId = extra.voice_id || 'it5NMxoQQ2INIh4XcO44';
 
+    // ── ElevenLabs audio render ──────────────────────────────────────────────
+    if (elevenlabsKey) {
+      const script = `#!/bin/bash
+set -e
+TASK_ID="${taskId}"
+MASTER="http://159.65.205.244:3000"
+ARTIFACT_DIR="${aDir}"
+HTML_SOURCE="${htmlSource}"
+OUT_VIDEO="${outVideo}"
+TG_TOKEN="${TG_TOKEN}"
+TG_CHAT="${TG_CHAT}"
+ELEVENLABS_KEY="${elevenlabsKey}"
+VOICE_ID="${voiceId}"
+
+tg() { curl -s "https://api.telegram.org/bot$TG_TOKEN/sendMessage" -d chat_id="$TG_CHAT" -d text="$1" -d parse_mode=Markdown > /dev/null 2>&1 || true; }
+state() { curl -sX POST "$MASTER/task/$TASK_ID/state" -H 'Content-Type: application/json' -d "{\\"to\\":\\"$1\\",\\"note\\":\\"$2\\"}" > /dev/null 2>&1; }
+
+mkdir -p "$ARTIFACT_DIR/frames" "$ARTIFACT_DIR/audio"
+
+# Find/copy HTML source
+if [ ! -f "$HTML_SOURCE" ]; then
+  HTML_SOURCE=$(find /mnt/shared/artifacts -name "gtbank-index.html" 2>/dev/null | head -1)
+fi
+[ -z "$HTML_SOURCE" ] && { state "failed" "No HTML source found"; exit 1; }
+cp "$HTML_SOURCE" "$ARTIFACT_DIR/gtbank-index.html"
+
+# Install dependencies
+state "installing_deps" "apt-get install chromium-browser ffmpeg python3"
+tg "🔧 *$(hostname)* installing dependencies..."
+DEBIAN_FRONTEND=noninteractive apt-get install -y -qq chromium-browser ffmpeg python3 2>/dev/null
+CHROMIUM=$(command -v chromium-browser || command -v chromium || echo "")
+[ -z "$CHROMIUM" ] && { state "failed" "chromium not found"; exit 1; }
+
+cd "$ARTIFACT_DIR"
+state "installing_puppeteer" "npm install puppeteer"
+[ ! -d node_modules/puppeteer ] && npm install --save puppeteer 2>&1 | tail -3
+
+# Write Python helper for ElevenLabs JSON body (avoids shell quoting issues)
+cat > "$ARTIFACT_DIR/tts.py" << 'PYEOF'
+import json, sys
+text = sys.argv[1]
+print(json.dumps({'text': text, 'model_id': 'eleven_multilingual_v2', 'voice_settings': {'stability': 0.5, 'similarity_boost': 0.75}}))
+PYEOF
+
+xi_tts() {
+  local TEXT="$1" OUT="$2"
+  python3 "$ARTIFACT_DIR/tts.py" "$TEXT" | \\
+    curl -sX POST "https://api.elevenlabs.io/v1/text-to-speech/$VOICE_ID" \\
+      -H "xi-api-key: $ELEVENLABS_KEY" \\
+      -H "Content-Type: application/json" \\
+      -d @- -o "$OUT"
+}
+dur_ms() {
+  local F="$1"
+  local S=$(ffprobe -v error -show_entries format=duration -of csv=p=0 "$F" 2>/dev/null)
+  python3 -c "print(int(float('$S') * 1000) + 1000)"
+}
+
+# Generate TTS audio for each slide (unrolled — no loop variable)
+state "generating_audio" "ElevenLabs TTS for 5 slides"
+tg "🎙 *$(hostname)* generating voice narrations via ElevenLabs..."
+
+xi_tts "Welcome to your GTBank Wrapped 2025. Hello Melchizedek, your year in numbers is here." "$ARTIFACT_DIR/audio/slide1.mp3"
+[ ! -s "$ARTIFACT_DIR/audio/slide1.mp3" ] && { state "failed" "ElevenLabs failed for slide 1"; exit 1; }
+D1=$(dur_ms "$ARTIFACT_DIR/audio/slide1.mp3")
+tg "🎙 Slide 1 ready: $D1 ms"
+
+xi_tts "You have been a GTBank customer for 18 years. Since February 2007, you have been a Premium Member in Lagos, still going strong." "$ARTIFACT_DIR/audio/slide2.mp3"
+[ ! -s "$ARTIFACT_DIR/audio/slide2.mp3" ] && { state "failed" "ElevenLabs failed for slide 2"; exit 1; }
+D2=$(dur_ms "$ARTIFACT_DIR/audio/slide2.mp3")
+tg "🎙 Slide 2 ready: $D2 ms"
+
+xi_tts "In 2025, your average monthly balance was 7.2 million naira. Total annual turnover was 19.5 million naira, with monthly lodgements averaging 1.85 million naira." "$ARTIFACT_DIR/audio/slide3.mp3"
+[ ! -s "$ARTIFACT_DIR/audio/slide3.mp3" ] && { state "failed" "ElevenLabs failed for slide 3"; exit 1; }
+D3=$(dur_ms "$ARTIFACT_DIR/audio/slide3.mp3")
+tg "🎙 Slide 3 ready: $D3 ms"
+
+xi_tts "What if your 7.2 million naira earned while you slept? With the GT Money Market Fund at 22 percent per annum, you could earn 1.59 million naira every year, automatically, with no lock-up." "$ARTIFACT_DIR/audio/slide4.mp3"
+[ ! -s "$ARTIFACT_DIR/audio/slide4.mp3" ] && { state "failed" "ElevenLabs failed for slide 4"; exit 1; }
+D4=$(dur_ms "$ARTIFACT_DIR/audio/slide4.mp3")
+tg "🎙 Slide 4 ready: $D4 ms"
+
+xi_tts "Grow your money today with the GT Money Market Fund. Daily returns credited. No lock-up period. Start from just 10,000 naira. Open on GTWorld or dial star 737 star 50 hash." "$ARTIFACT_DIR/audio/slide5.mp3"
+[ ! -s "$ARTIFACT_DIR/audio/slide5.mp3" ] && { state "failed" "ElevenLabs failed for slide 5"; exit 1; }
+D5=$(dur_ms "$ARTIFACT_DIR/audio/slide5.mp3")
+tg "🎙 Slide 5 ready: $D5 ms"
+
+# Write durations JSON for capture script
+echo "[$D1,$D2,$D3,$D4,$D5]" > "$ARTIFACT_DIR/slide_durations.json"
+tg "📐 Slide durations (ms): [$D1,$D2,$D3,$D4,$D5]"
+
+# Write per-slide-duration puppeteer capture script
+cat > "$ARTIFACT_DIR/capture.js" << 'CAPEOF'
+const puppeteer = require('puppeteer');
+const path = require('path');
+const fs = require('fs');
+const HTML = process.argv[2];
+const OUTDIR = process.argv[3];
+const FPS = parseInt(process.argv[4] || '30');
+const DURATIONS = JSON.parse(process.argv[5] || '[3000,3000,3000,3000,3000]');
+const FRAME_MS = 1000 / FPS;
+async function main() {
+  fs.mkdirSync(OUTDIR, { recursive: true });
+  const browser = await puppeteer.launch({
+    executablePath: process.env.CHROMIUM_PATH || '/usr/bin/chromium',
+    args: ['--no-sandbox','--disable-setuid-sandbox','--disable-dev-shm-usage','--disable-gpu','--window-size=1280,720'],
+    headless: true,
+  });
+  const page = await browser.newPage();
+  await page.setViewport({ width: 1280, height: 720 });
+  let gf = 0;
+  for (let slide = 1; slide <= DURATIONS.length; slide++) {
+    const slideMs = DURATIONS[slide - 1];
+    const framesPerSlide = Math.ceil(slideMs / FRAME_MS);
+    const url = 'file://' + path.resolve(HTML) + '?slide=' + slide;
+    await page.goto(url, { waitUntil: 'networkidle0' });
+    await new Promise(function(r) { setTimeout(r, 200); });
+    for (let f = 0; f < framesPerSlide; f++) {
+      const ms = f * FRAME_MS;
+      await page.evaluate(function(ms) {
+        document.querySelectorAll('.slide.active').forEach(function(s) {
+          s.getAnimations({subtree:true}).forEach(function(a) { try { a.currentTime = ms; } catch(e) {} });
+        });
+      }, ms);
+      const fname = 'frame_' + String(gf).padStart(5,'0') + '.png';
+      await page.screenshot({ path: path.join(OUTDIR, fname), clip: {x:0,y:0,width:1280,height:720} });
+      gf++;
+    }
+    console.log('Slide ' + slide + ': ' + framesPerSlide + ' frames (' + slideMs + 'ms)');
+  }
+  await browser.close();
+  console.log('Total frames: ' + gf);
+}
+main().catch(function(e) { console.error(e); process.exit(1); });
+CAPEOF
+
+# Capture frames with variable per-slide durations
+state "capturing_frames" "puppeteer rendering with per-slide audio timing"
+tg "🎬 *$(hostname)* capturing frames (variable durations)..."
+rm -f "$ARTIFACT_DIR/frames"/frame_*.png
+DURATIONS_JSON=$(cat "$ARTIFACT_DIR/slide_durations.json")
+CHROMIUM_PATH="$CHROMIUM" node "$ARTIFACT_DIR/capture.js" \\
+  "$ARTIFACT_DIR/gtbank-index.html" "$ARTIFACT_DIR/frames" 30 "$DURATIONS_JSON"
+
+FRAME_COUNT=$(ls "$ARTIFACT_DIR/frames"/frame_*.png 2>/dev/null | wc -l)
+[ "$FRAME_COUNT" -lt 50 ] && { state "failed" "Only $FRAME_COUNT frames captured"; exit 1; }
+tg "📸 $FRAME_COUNT frames captured"
+
+# Build audio track: slide narration + 1s silence per slide = exact slide duration
+state "mixing_audio" "concatenating narrations with 1s silence padding"
+tg "🎵 *$(hostname)* mixing audio..."
+
+# Create 1-second silence MP3
+ffmpeg -y -f lavfi -i anullsrc=r=44100:cl=stereo -t 1.0 -q:a 9 -acodec libmp3lame \\
+  "$ARTIFACT_DIR/audio/silence1s.mp3" 2>/dev/null
+
+# Build concat list (unrolled — no loop variable)
+CONCAT_LIST="$ARTIFACT_DIR/audio/concat_list.txt"
+cat > "$CONCAT_LIST" << LISTEOF
+file '$ARTIFACT_DIR/audio/slide1.mp3'
+file '$ARTIFACT_DIR/audio/silence1s.mp3'
+file '$ARTIFACT_DIR/audio/slide2.mp3'
+file '$ARTIFACT_DIR/audio/silence1s.mp3'
+file '$ARTIFACT_DIR/audio/slide3.mp3'
+file '$ARTIFACT_DIR/audio/silence1s.mp3'
+file '$ARTIFACT_DIR/audio/slide4.mp3'
+file '$ARTIFACT_DIR/audio/silence1s.mp3'
+file '$ARTIFACT_DIR/audio/slide5.mp3'
+file '$ARTIFACT_DIR/audio/silence1s.mp3'
+LISTEOF
+
+ffmpeg -y -f concat -safe 0 -i "$CONCAT_LIST" -c:a aac -b:a 192k \\
+  "$ARTIFACT_DIR/audio/combined.aac" 2>&1 | tail -3
+
+# Encode final video + audio
+state "encoding_video" "ffmpeg H.264 + AAC encode"
+tg "🎞 *$(hostname)* encoding $FRAME_COUNT frames + audio → MP4..."
+ffmpeg -y -framerate 30 -i "$ARTIFACT_DIR/frames/frame_%05d.png" \\
+  -i "$ARTIFACT_DIR/audio/combined.aac" \\
+  -c:v libx264 -preset slow -crf 18 -pix_fmt yuv420p \\
+  -c:a copy \\
+  -movflags +faststart \\
+  -shortest \\
+  "$OUT_VIDEO" 2>&1 | tail -5
+
+SIZE=$(du -h "$OUT_VIDEO" | cut -f1)
+state "done" "MP4 ready: $OUT_VIDEO ($SIZE)"
+tg "✅ *GTBank Wrapped 2025 + Audio* render complete on \`$(hostname)\`
+📁 \`$OUT_VIDEO\`
+🎞 $FRAME_COUNT frames + ElevenLabs voice → MP4 ($SIZE)"
+`;
+
+      return {
+        plan_summary: `Render GTBank Wrapped 2025 HTML slides to MP4 with ElevenLabs audio on ${worker.id}`,
+        telegram_message: `📋 *Plan: GTBank Wrapped 2025 + Audio Render*\n\n🖥 *${worker.id}* → renderer\nSteps: install_deps → install_puppeteer → generating_audio → capturing_frames → mixing_audio → encoding_video\n\n🎙 Voice: ElevenLabs \`${voiceId}\`\nArtifact: \`${aDir}/output.mp4\``,
+        artifact_dir: aDir + '/',
+        worker_assignments: [{ worker_id: worker.id, role: 'renderer', script }],
+      };
+    }
+
+    // ── Silent render (no audio) ─────────────────────────────────────────────
     const script = `#!/bin/bash
 set -e
 TASK_ID="${taskId}"
@@ -121,10 +324,6 @@ state "installing_puppeteer" "npm install puppeteer"
 cd "$ARTIFACT_DIR"
 [ ! -d node_modules/puppeteer ] && npm install --save puppeteer 2>&1 | tail -3
 
-# Copy capture script
-CAPTURE_JS=$(find /mnt/shared/artifacts -name "gtbank-capture.js" 2>/dev/null | head -1)
-[ -z "$CAPTURE_JS" ] && CAPTURE_JS="$ARTIFACT_DIR/capture.js"
-
 cat > "$ARTIFACT_DIR/capture.js" << 'CAPEOF'
 const puppeteer = require('puppeteer');
 const path = require('path');
@@ -149,13 +348,16 @@ async function main() {
   for (let slide = 1; slide <= SLIDES; slide++) {
     const url = 'file://' + path.resolve(HTML) + '?slide=' + slide;
     await page.goto(url, { waitUntil: 'networkidle0' });
-    await new Promise(r => setTimeout(r, 200));
+    await new Promise(function(r) { setTimeout(r, 200); });
     for (let f = 0; f < FRAMES_PER_SLIDE; f++) {
       const ms = f * FRAME_MS;
-      await page.evaluate((ms) => {
-        document.querySelectorAll('.slide.active').forEach(s => s.getAnimations({subtree:true}).forEach(a => { try { a.currentTime = ms; } catch {} }));
+      await page.evaluate(function(ms) {
+        document.querySelectorAll('.slide.active').forEach(function(s) {
+          s.getAnimations({subtree:true}).forEach(function(a) { try { a.currentTime = ms; } catch(e) {} });
+        });
       }, ms);
-      await page.screenshot({ path: path.join(OUTDIR, 'frame_' + String(gf).padStart(5,'0') + '.png'), clip: {x:0,y:0,width:1280,height:720} });
+      const fname = 'frame_' + String(gf).padStart(5,'0') + '.png';
+      await page.screenshot({ path: path.join(OUTDIR, fname), clip: {x:0,y:0,width:1280,height:720} });
       gf++;
     }
     console.log('Slide ' + slide + ': ' + FRAMES_PER_SLIDE + ' frames');
@@ -163,7 +365,7 @@ async function main() {
   await browser.close();
   console.log('Total frames: ' + gf);
 }
-main().catch(e => { console.error(e); process.exit(1); });
+main().catch(function(e) { console.error(e); process.exit(1); });
 CAPEOF
 
 # Capture frames
