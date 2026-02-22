@@ -400,6 +400,8 @@ function TaskWindow({ taskId, initialTask, onClose, offsetIndex }) {
 function WorkersTab({ workers }) {
   const [tasks, setTasks] = useState([]);
   const [newTask, setNewTask] = useState('');
+  const [newTaskSource, setNewTaskSource] = useState('');
+  const [uploadStatus, setUploadStatus] = useState('');
   const [hover, setHover] = useState(null);
   const [hoverTs, setHoverTs] = useState({});
   const [openDesktops, setOpenDesktops] = useState([]);
@@ -427,10 +429,23 @@ function WorkersTab({ workers }) {
   }
   function closeTaskWindow(id) { setOpenTaskWindows(prev => prev.filter(t => t.id !== id)); }
 
+  async function handleFileUpload(e) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setUploadStatus('uploading...');
+    try {
+      const r = await fetch(`/api/upload?filename=${encodeURIComponent(file.name)}`, { method: 'POST', body: file });
+      const d = await r.json();
+      if (d.ok) { setNewTaskSource('/mnt/shared/' + d.path); setUploadStatus('✓ ' + d.path); }
+      else setUploadStatus('upload failed');
+    } catch { setUploadStatus('upload failed'); }
+  }
+
   async function addTask() {
     if (!newTask.trim()) return;
-    await fetch('/api/task', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ title: newTask, description: newTask, status: 'queued' }) });
-    setNewTask(''); fetchTasks();
+    const extra = newTaskSource.trim() ? { source_url: newTaskSource.trim() } : {};
+    await fetch('/api/task', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ title: newTask, description: newTask, status: 'queued', extra }) });
+    setNewTask(''); setNewTaskSource(''); setUploadStatus(''); fetchTasks();
   }
 
   return (
@@ -517,10 +532,21 @@ function WorkersTab({ workers }) {
 
       <div style={S.section}>
         <div style={S.sectionTitle}>Assign Task</div>
-        <div style={{ display: 'flex', gap: '0.75rem', alignItems: 'flex-end', ...S.card }}>
-          <input style={S.input} value={newTask} onChange={e => setNewTask(e.target.value)}
-            onKeyDown={e => e.key === 'Enter' && addTask()} placeholder="task description..." />
-          <button style={{ ...S.btn, flexShrink: 0 }} onClick={addTask}>Assign</button>
+        <div style={{ ...S.card, display: 'flex', flexDirection: 'column', gap: '0.6rem' }}>
+          <div style={{ display: 'flex', gap: '0.75rem', alignItems: 'flex-end' }}>
+            <input style={S.input} value={newTask} onChange={e => setNewTask(e.target.value)}
+              onKeyDown={e => e.key === 'Enter' && addTask()} placeholder="task description..." />
+            <button style={{ ...S.btn, flexShrink: 0 }} onClick={addTask}>Assign</button>
+          </div>
+          <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
+            <input style={{ ...S.input, fontSize: '0.75rem', color: T.muted }} value={newTaskSource}
+              onChange={e => setNewTaskSource(e.target.value)} placeholder="source URL or /mnt/shared/... path (optional)" />
+            <label style={{ ...S.btnGhost, flexShrink: 0, cursor: 'pointer', fontSize: '0.68rem' }}>
+              ↑ file
+              <input type="file" style={{ display: 'none' }} onChange={handleFileUpload} />
+            </label>
+          </div>
+          {uploadStatus && <div style={{ fontSize: '0.68rem', fontFamily: T.mono, color: T.muted }}>{uploadStatus}</div>}
         </div>
       </div>
 
@@ -577,11 +603,13 @@ function WorkersTab({ workers }) {
 // ── NFS Tab ───────────────────────────────────────────────────────────────────
 const VIDEO_EXTS = new Set(['.mp4','.webm','.avi','.mov']);
 const IMAGE_EXTS = new Set(['.png','.jpg','.jpeg','.gif','.webp']);
+const AUDIO_EXTS = new Set(['.mp3','.aac','.wav','.ogg']);
 
 function fileIcon(name) {
   const ext = (name.match(/\.[^.]+$/) || [''])[0].toLowerCase();
   if (VIDEO_EXTS.has(ext)) return '🎬';
   if (IMAGE_EXTS.has(ext)) return '🖼';
+  if (AUDIO_EXTS.has(ext)) return '🎵';
   if (['.sh','.js','.py','.json'].includes(ext)) return '⌨';
   if (['.log','.txt','.md'].includes(ext)) return '📝';
   return '📄';
@@ -636,7 +664,7 @@ function NFSTab() {
             const filePath = nfsPath ? `${nfsPath}/${e.name}` : e.name;
             const fUrl = `/api/nfs/file?path=${encodeURIComponent(filePath)}`;
             const fExt = (e.name.match(/\.[^.]+$/) || [''])[0].toLowerCase();
-            const isMedia = VIDEO_EXTS.has(fExt) || IMAGE_EXTS.has(fExt);
+            const isMedia = VIDEO_EXTS.has(fExt) || IMAGE_EXTS.has(fExt) || AUDIO_EXTS.has(fExt);
             return (
               <div key={e.name} style={{ padding: '0.45rem 0.75rem', borderBottom: T.border, display: 'flex', gap: '0.5rem', alignItems: 'center', transition: 'background 0.1s' }}
                 onMouseEnter={ev => ev.currentTarget.style.background = T.bg}
@@ -692,8 +720,15 @@ function NFSTab() {
             </video>
           )}
 
+          {/* Binary: audio */}
+          {data.binary && AUDIO_EXTS.has(ext) && (
+            <audio controls style={{ width: '100%', marginTop: '0.5rem' }}>
+              <source src={fileUrl} />
+            </audio>
+          )}
+
           {/* Binary: other */}
-          {data.binary && !IMAGE_EXTS.has(ext) && !VIDEO_EXTS.has(ext) && (
+          {data.binary && !IMAGE_EXTS.has(ext) && !VIDEO_EXTS.has(ext) && !AUDIO_EXTS.has(ext) && (
             <div style={{ ...S.card, color: T.muted, textAlign: 'center', padding: '2rem', fontFamily: T.mono, fontSize: '0.78rem' }}>
               Binary file · {data.size ? ((data.size/1024).toFixed(1) + 'kb') : ''}
             </div>

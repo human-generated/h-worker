@@ -153,7 +153,7 @@ app.get('/nfs', (req, res) => {
     } else {
       // Text files: return content; binary: return metadata only
       const ext = path.extname(abs).toLowerCase();
-      const binaryExts = new Set(['.mp4','.webm','.avi','.mov','.png','.jpg','.jpeg','.gif','.webp','.pdf','.zip','.tar','.gz']);
+      const binaryExts = new Set(['.mp3','.aac','.wav','.ogg','.mp4','.webm','.avi','.mov','.png','.jpg','.jpeg','.gif','.webp','.pdf','.zip','.tar','.gz']);
       if (binaryExts.has(ext)) {
         const s = fs.statSync(abs);
         res.json({ type: 'file', path: rel, binary: true, size: s.size, ext });
@@ -176,7 +176,7 @@ app.get('/nfs/file', (req, res) => {
   const mimes = {
     '.mp4':'video/mp4','.webm':'video/webm','.avi':'video/x-msvideo','.mov':'video/quicktime',
     '.png':'image/png','.jpg':'image/jpeg','.jpeg':'image/jpeg','.gif':'image/gif','.webp':'image/webp',
-    '.pdf':'application/pdf','.zip':'application/zip',
+    '.mp3':'audio/mpeg','.aac':'audio/aac','.wav':'audio/wav','.ogg':'audio/ogg','.pdf':'application/pdf','.zip':'application/zip',
     '.json':'application/json','.sh':'text/plain','.js':'text/javascript','.html':'text/html',
     '.txt':'text/plain','.log':'text/plain','.md':'text/plain',
   };
@@ -184,6 +184,19 @@ app.get('/nfs/file', (req, res) => {
   res.setHeader('Content-Type', mime);
   res.setHeader('Content-Disposition', `inline; filename="${name}"`);
   fs.createReadStream(abs).pipe(res);
+});
+
+// File upload to NFS
+const UPLOAD_DIR = "/mnt/shared/uploads";
+app.post("/upload", (req, res) => {
+  const filename = path.basename((req.query.filename || "upload").replace(/\.\./g, ""));
+  const safeFile = filename.replace(/[^a-zA-Z0-9._-]/g, "_");
+  const dest = path.join(UPLOAD_DIR, safeFile);
+  fs.mkdirSync(UPLOAD_DIR, { recursive: true });
+  const stream = fs.createWriteStream(dest);
+  req.pipe(stream);
+  stream.on("finish", () => res.json({ ok: true, path: "uploads/" + safeFile }));
+  stream.on("error", e => res.status(500).json({ error: e.message }));
 });
 
 // Skills API

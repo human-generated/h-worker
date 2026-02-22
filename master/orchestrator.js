@@ -72,6 +72,134 @@ function builtinPlan(task, artifactDir, workerList) {
   // Pick the first available worker
   const worker = workerList.find(w => w.status === 'active') || { id: 'hw-worker-1', ip: '164.90.197.224' };
 
+  // ── Image slideshow plan ────────────────────────────────────────────────────
+  if (type === 'image_slideshow' || (extra.images && extra.images.length > 0 && extra.narrations)) {
+    const imgs = extra.images || [];
+    const narrs = extra.narrations || [];
+    const nSlides = Math.min(imgs.length, narrs.length);
+    if (nSlides > 0 && (extra.elevenlabs_key || extra.elevenlabs_key === undefined)) {
+      const taskId = task.id;
+      const aDir = artifactDir;
+      const outVideo = `${aDir}/output.mp4`;
+      const TG_TOKEN = '8202032261:AAFiptoYDpznIbnSvyjPrftsyteVMXcFUz8';
+      const TG_CHAT  = '-5166727984';
+      const elKey = extra.elevenlabs_key || '';
+      const vId = extra.voice_id || 'it5NMxoQQ2INIh4XcO44';
+      const maxSlideSec = (extra.max_slide_ms || 8000) / 1000;
+
+      // Build narration bash variables
+      const narrationVars = narrs.slice(0, nSlides).map((n, idx) => {
+        const esc = n.replace(/\\/g, '\\\\').replace(/'/g, "'\\''");
+        return `NARR${idx+1}='${esc}'`;
+      }).join('\n');
+
+      // Build image copy commands (hardcoded source → artifact dir)
+      const imageCopyLines = imgs.slice(0, nSlides).map((img, idx) =>
+        `cp "${img}" "${aDir}/img${idx+1}.png"`
+      ).join('\n');
+
+      // Build per-slide TTS + duration blocks (JS loop, no bash loop vars)
+      let ttsBlocks = '';
+      let segBlocks = '';
+      for (let i = 1; i <= nSlides; i++) {
+        ttsBlocks += `
+xi_tts "$NARR${i}" "$ARTIFACT_DIR/audio/slide${i}.mp3"
+[ ! -s "$ARTIFACT_DIR/audio/slide${i}.mp3" ] && { state "failed" "ElevenLabs failed for slide ${i}"; exit 1; }
+A${i}=$(ffprobe -v error -show_entries format=duration -of csv=p=0 "$ARTIFACT_DIR/audio/slide${i}.mp3" 2>/dev/null)
+D${i}=$(python3 -c "print(round(min(float('$A${i}'), ${maxSlideSec}), 3))")
+tg "Slide ${i} ready: $D${i}s"
+`;
+        segBlocks += `
+state "rendering_slide_${i}" "ffmpeg image ${i} + audio"
+ffmpeg -y -loop 1 -i "${aDir}/img${i}.png" -i "$ARTIFACT_DIR/audio/slide${i}.mp3" \\
+  -c:v libx264 -preset fast -crf 22 -c:a aac -b:a 128k \\
+  -vf "scale=1280:720:force_original_aspect_ratio=decrease,pad=1280:720:-1:-1:color=black,setsar=1" \\
+  -pix_fmt yuv420p -t $D${i} \\
+  "$ARTIFACT_DIR/seg${i}.mp4" 2>&1 | tail -2
+`;
+      }
+
+      // Concat file entries (hardcoded paths — no bash var expansion needed)
+      const concatFileLines = Array.from({length: nSlides}, (_, idx) =>
+        `file '${aDir}/seg${idx+1}.mp4'`
+      ).join('\n');
+
+      const script = `#!/bin/bash
+set -e
+TASK_ID="${taskId}"
+MASTER="http://159.65.205.244:3000"
+ARTIFACT_DIR="${aDir}"
+OUT_VIDEO="${outVideo}"
+TG_TOKEN="${TG_TOKEN}"
+TG_CHAT="${TG_CHAT}"
+ELEVENLABS_KEY="${elKey}"
+VOICE_ID="${vId}"
+${narrationVars}
+
+tg() { curl -s "https://api.telegram.org/bot$TG_TOKEN/sendMessage" -d chat_id="$TG_CHAT" -d text="$1" -d parse_mode=Markdown > /dev/null 2>&1 || true; }
+state() { curl -sX POST "$MASTER/task/$TASK_ID/state" -H 'Content-Type: application/json' -d "{\\"to\\":\\"$1\\",\\"note\\":\\"$2\\"}" > /dev/null 2>&1; }
+
+mkdir -p "$ARTIFACT_DIR/audio"
+
+state "installing_deps" "apt-get install ffmpeg python3"
+tg "🔧 *$(hostname)* installing deps..."
+DEBIAN_FRONTEND=noninteractive apt-get install -y -qq ffmpeg python3 2>/dev/null
+
+# Python helper for ElevenLabs JSON
+cat > "$ARTIFACT_DIR/tts.py" << 'PYEOF'
+import json, sys
+text = sys.argv[1]
+print(json.dumps({'text': text, 'model_id': 'eleven_multilingual_v2', 'voice_settings': {'stability': 0.5, 'similarity_boost': 0.75}}))
+PYEOF
+
+xi_tts() {
+  local TEXT="$1" OUT="$2"
+  python3 "$ARTIFACT_DIR/tts.py" "$TEXT" | \\
+    curl -sX POST "https://api.elevenlabs.io/v1/text-to-speech/$VOICE_ID" \\
+      -H "xi-api-key: $ELEVENLABS_KEY" \\
+      -H "Content-Type: application/json" \\
+      -d @- -o "$OUT"
+}
+
+# Copy source images
+state "copying_images" "copying ${nSlides} source images"
+${imageCopyLines}
+
+# Generate TTS narrations
+state "generating_audio" "ElevenLabs TTS for ${nSlides} slides"
+tg "🎙 *$(hostname)* generating narrations via ElevenLabs..."
+${ttsBlocks}
+
+# Render each slide as a video segment
+${segBlocks}
+
+# Concatenate all segments
+state "concatenating" "ffmpeg concat ${nSlides} segments"
+tg "🎞 *$(hostname)* concatenating..."
+cat > "$ARTIFACT_DIR/concat.txt" << 'CEOF'
+${concatFileLines}
+CEOF
+
+ffmpeg -y -f concat -safe 0 -i "$ARTIFACT_DIR/concat.txt" \\
+  -c:v libx264 -c:a aac -b:a 128k -movflags +faststart \\
+  "$OUT_VIDEO" 2>&1 | tail -5
+
+SIZE=$(du -h "$OUT_VIDEO" | cut -f1)
+state "done" "MP4 ready: $OUT_VIDEO ($SIZE)"
+tg "✅ *Slideshow* complete on \`$(hostname)\`
+📁 \`$OUT_VIDEO\`
+🎬 ${nSlides} slides → MP4 ($SIZE)"
+`;
+
+      return {
+        plan_summary: `Render ${nSlides}-image slideshow with ElevenLabs audio on ${worker.id}`,
+        telegram_message: `📋 *Plan: Image Slideshow*\n\n🖥 *${worker.id}* → renderer\nSteps: installing_deps → copying_images → generating_audio → rendering_slide_1..${nSlides} → concatenating\n\n${nSlides} images, max ${maxSlideSec}s/slide\nArtifact: \`${aDir}/output.mp4\``,
+        artifact_dir: aDir + '/',
+        worker_assignments: [{ worker_id: worker.id, role: 'renderer', script }],
+      };
+    }
+  }
+
   // HTML → Video render plan
   if (type === 'render' || desc.includes('video') || desc.includes('render') || desc.includes('slide')) {
     const htmlSource = extra.html_source || '';
@@ -117,8 +245,15 @@ CHROMIUM=$(command -v chromium-browser || command -v chromium || echo "")
 [ -z "$CHROMIUM" ] && { state "failed" "chromium not found"; exit 1; }
 
 cd "$ARTIFACT_DIR"
-state "installing_puppeteer" "npm install puppeteer"
-[ ! -d node_modules/puppeteer ] && npm install --save puppeteer 2>&1 | tail -3
+state "installing_puppeteer" "npm install puppeteer (with bundled Chrome)"
+[ ! -d node_modules/puppeteer ] && npm install --save puppeteer 2>&1 | tail -5
+# Use puppeteer's bundled Chrome — avoids snap/system Chromium issues
+CHROMIUM=$(node -e "const p=require('puppeteer'); console.log(p.executablePath ? p.executablePath() : '')" 2>/dev/null || echo "")
+[ -z "$CHROMIUM" ] && CHROMIUM=$(find $ARTIFACT_DIR/node_modules/.cache -name 'chrome' -type f 2>/dev/null | head -1)
+# Fallback to system chromium if puppeteer bundled not found
+[ -z "$CHROMIUM" ] && CHROMIUM=$(command -v google-chrome-stable || command -v chromium-browser || command -v chromium || echo "")
+[ -z "$CHROMIUM" ] && { state "failed" "No usable Chrome binary found"; exit 1; }
+echo "Using Chrome: $CHROMIUM"
 
 # Write Python helper for ElevenLabs JSON body (avoids shell quoting issues)
 cat > "$ARTIFACT_DIR/tts.py" << 'PYEOF'
@@ -175,6 +310,7 @@ echo "[$D1,$D2,$D3,$D4,$D5]" > "$ARTIFACT_DIR/slide_durations.json"
 tg "📐 Slide durations (ms): [$D1,$D2,$D3,$D4,$D5]"
 
 # Write per-slide-duration puppeteer capture script
+# Optimization: only shoot animation frames (first ANIM_MS), then copy last frame for remainder
 cat > "$ARTIFACT_DIR/capture.js" << 'CAPEOF'
 const puppeteer = require('puppeteer');
 const path = require('path');
@@ -183,11 +319,12 @@ const HTML = process.argv[2];
 const OUTDIR = process.argv[3];
 const FPS = parseInt(process.argv[4] || '30');
 const DURATIONS = JSON.parse(process.argv[5] || '[3000,3000,3000,3000,3000]');
+const ANIM_MS = 2000; // CSS animations all complete within 2s
 const FRAME_MS = 1000 / FPS;
 async function main() {
   fs.mkdirSync(OUTDIR, { recursive: true });
   const browser = await puppeteer.launch({
-    executablePath: process.env.CHROMIUM_PATH || '/usr/bin/chromium',
+    executablePath: process.env.CHROMIUM_PATH,
     args: ['--no-sandbox','--disable-setuid-sandbox','--disable-dev-shm-usage','--disable-gpu','--window-size=1280,720'],
     headless: true,
   });
@@ -196,22 +333,32 @@ async function main() {
   let gf = 0;
   for (let slide = 1; slide <= DURATIONS.length; slide++) {
     const slideMs = DURATIONS[slide - 1];
-    const framesPerSlide = Math.ceil(slideMs / FRAME_MS);
+    const totalFrames = Math.ceil(slideMs / FRAME_MS);
+    const animFrames = Math.min(Math.ceil(ANIM_MS / FRAME_MS), totalFrames);
     const url = 'file://' + path.resolve(HTML) + '?slide=' + slide;
     await page.goto(url, { waitUntil: 'networkidle0' });
     await new Promise(function(r) { setTimeout(r, 200); });
-    for (let f = 0; f < framesPerSlide; f++) {
+    // Capture animation portion via puppeteer
+    var lastPath = '';
+    for (let f = 0; f < animFrames; f++) {
       const ms = f * FRAME_MS;
       await page.evaluate(function(ms) {
         document.querySelectorAll('.slide.active').forEach(function(s) {
           s.getAnimations({subtree:true}).forEach(function(a) { try { a.currentTime = ms; } catch(e) {} });
         });
       }, ms);
-      const fname = 'frame_' + String(gf).padStart(5,'0') + '.png';
-      await page.screenshot({ path: path.join(OUTDIR, fname), clip: {x:0,y:0,width:1280,height:720} });
+      lastPath = path.join(OUTDIR, 'frame_' + String(gf).padStart(5,'0') + '.png');
+      await page.screenshot({ path: lastPath, clip: {x:0,y:0,width:1280,height:720} });
       gf++;
     }
-    console.log('Slide ' + slide + ': ' + framesPerSlide + ' frames (' + slideMs + 'ms)');
+    // Hold last frame for remainder (fast file copy, no puppeteer)
+    const holdFrames = totalFrames - animFrames;
+    for (let h = 0; h < holdFrames; h++) {
+      const dest = path.join(OUTDIR, 'frame_' + String(gf).padStart(5,'0') + '.png');
+      fs.copyFileSync(lastPath, dest);
+      gf++;
+    }
+    console.log('Slide ' + slide + ': ' + animFrames + ' shot + ' + holdFrames + ' held = ' + totalFrames + ' frames (' + slideMs + 'ms)');
   }
   await browser.close();
   console.log('Total frames: ' + gf);
@@ -320,9 +467,13 @@ state "installing_ffmpeg" "apt-get install ffmpeg"
 DEBIAN_FRONTEND=noninteractive apt-get install -y -qq ffmpeg 2>/dev/null
 
 # Install puppeteer
-state "installing_puppeteer" "npm install puppeteer"
+state "installing_puppeteer" "npm install puppeteer (with bundled Chrome)"
 cd "$ARTIFACT_DIR"
-[ ! -d node_modules/puppeteer ] && npm install --save puppeteer 2>&1 | tail -3
+[ ! -d node_modules/puppeteer ] && npm install --save puppeteer 2>&1 | tail -5
+CHROMIUM=$(node -e "const p=require('puppeteer'); console.log(p.executablePath ? p.executablePath() : '')" 2>/dev/null || echo "")
+[ -z "$CHROMIUM" ] && CHROMIUM=$(command -v google-chrome-stable || command -v chromium-browser || command -v chromium || echo "")
+[ -z "$CHROMIUM" ] && { state "failed" "No usable Chrome binary found"; exit 1; }
+echo "Using Chrome: $CHROMIUM"
 
 cat > "$ARTIFACT_DIR/capture.js" << 'CAPEOF'
 const puppeteer = require('puppeteer');
@@ -338,7 +489,7 @@ const FRAMES_PER_SLIDE = Math.ceil(SLIDE_MS / FRAME_MS);
 async function main() {
   fs.mkdirSync(OUTDIR, { recursive: true });
   const browser = await puppeteer.launch({
-    executablePath: process.env.CHROMIUM_PATH || '/usr/bin/chromium',
+    executablePath: process.env.CHROMIUM_PATH,
     args: ['--no-sandbox','--disable-setuid-sandbox','--disable-dev-shm-usage','--disable-gpu','--window-size=1280,720'],
     headless: true,
   });
