@@ -283,6 +283,9 @@ function StateMachineGraph({ currentStatus, transitions = [] }) {
 // ── Task Window ───────────────────────────────────────────────────────────────
 function TaskWindow({ taskId, initialTask, onClose, offsetIndex }) {
   const [task, setTask] = useState(initialTask);
+  const [logs, setLogs] = useState('');
+  const [logsVisible, setLogsVisible] = useState(false);
+  const logsRef = useRef(null);
   const [pos, setPos] = useState({ x: 120 + offsetIndex * 24, y: 100 + offsetIndex * 24 });
   const [dragging, setDragging] = useState(false);
   const [dragOffset, setDragOffset] = useState({ x: 0, y: 0 });
@@ -305,6 +308,23 @@ function TaskWindow({ taskId, initialTask, onClose, offsetIndex }) {
   }
 
   useEffect(() => { refresh(); const t = setInterval(refresh, 6000); return () => clearInterval(t); }, [taskId]);
+
+  useEffect(() => {
+    if (!logsVisible) return;
+    async function fetchLogs() {
+      try {
+        const r = await fetch(`/api/task/${taskId}/logs`);
+        const d = await r.json();
+        if (d.logs !== undefined) {
+          setLogs(d.logs);
+          if (logsRef.current) logsRef.current.scrollTop = logsRef.current.scrollHeight;
+        }
+      } catch {}
+    }
+    fetchLogs();
+    const t = setInterval(fetchLogs, 2000);
+    return () => clearInterval(t);
+  }, [taskId, logsVisible]);
 
   useEffect(() => {
     if (!dragging) return;
@@ -384,11 +404,25 @@ function TaskWindow({ taskId, initialTask, onClose, offsetIndex }) {
           </div>
         )}
 
+        {/* Logs panel */}
+        {logsVisible && (
+          <div style={{ marginBottom: '1rem' }}>
+            <div style={{ ...S.sectionTitle, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <span>Run Log</span>
+              <span style={{ color: 'rgba(0,0,0,0.3)', fontSize: '0.6rem' }}>{logs ? logs.split('\n').length + ' lines' : 'empty'}</span>
+            </div>
+            <div ref={logsRef} style={{ ...S.code, maxHeight: '260px', fontSize: '0.7rem', lineHeight: 1.6, background: '#0D0D0D', color: '#6CEFA0', overflowY: 'auto' }}>
+              {logs || '(no output yet)'}
+            </div>
+          </div>
+        )}
+
         {/* Actions */}
-        <div style={{ display: 'flex', gap: '0.5rem', borderTop: T.border, paddingTop: '0.75rem' }}>
+        <div style={{ display: 'flex', gap: '0.5rem', borderTop: T.border, paddingTop: '0.75rem', flexWrap: 'wrap' }}>
           {canRetry  && <button style={S.btn} onClick={() => transition('pending')}>↺ retry</button>}
           {canFail   && <button style={{ ...S.btnGhost, color: T.red, borderColor: T.red+'44' }} onClick={() => transition('failed')}>mark failed</button>}
           {canCancel && <button style={S.btnGhost} onClick={() => transition('cancelled')}>cancel</button>}
+          <button style={{ ...S.btnGhost }} onClick={() => setLogsVisible(v => !v)}>{logsVisible ? '▲ logs' : '▼ logs'}</button>
           <button style={{ ...S.btnGhost, marginLeft: 'auto' }} onClick={refresh}>↺</button>
         </div>
       </div>
@@ -432,13 +466,17 @@ function WorkersTab({ workers }) {
   async function handleFileUpload(e) {
     const file = e.target.files?.[0];
     if (!file) return;
-    setUploadStatus('uploading...');
+    setUploadStatus(`uploading ${(file.size/1024).toFixed(0)}kb...`);
     try {
-      const r = await fetch(`/api/upload?filename=${encodeURIComponent(file.name)}`, { method: 'POST', body: file });
+      // POST directly to master to bypass Vercel body size limits
+      const r = await fetch(`http://159.65.205.244:3000/upload?filename=${encodeURIComponent(file.name)}`, {
+        method: 'POST', body: file,
+        headers: { 'X-Filename': file.name },
+      });
       const d = await r.json();
-      if (d.ok) { setNewTaskSource('/mnt/shared/' + d.path); setUploadStatus('✓ ' + d.path); }
-      else setUploadStatus('upload failed');
-    } catch { setUploadStatus('upload failed'); }
+      if (d.ok) { setNewTaskSource(d.nfs || ('/mnt/shared/' + d.path)); setUploadStatus('✓ ' + d.path + ' (' + (d.size/1024).toFixed(0) + 'kb)'); }
+      else setUploadStatus('upload failed: ' + (d.error || 'unknown'));
+    } catch(err) { setUploadStatus('upload failed: ' + err.message); }
   }
 
   async function addTask() {
@@ -579,6 +617,7 @@ function WorkersTab({ workers }) {
                     <td style={{ padding: '0.45rem 0.75rem', maxWidth: 280, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                       {t.parent_task && <span style={{ fontSize: '0.6rem', color: T.muted, marginRight: 4 }}>↳</span>}
                       {label}
+                      {t.assigned_worker && <span style={{fontSize:'0.6rem',background:'#FEF3C7',color:'#78350F',padding:'1px 4px',borderRadius:'2px',marginLeft:'4px'}}>{t.assigned_worker.replace('hw-worker-','w')}</span>}
                     </td>
                     <td style={{ padding: '0.45rem 0.75rem' }}>
                       <span style={{ display: 'inline-flex', alignItems: 'center', gap: '0.35rem' }}>

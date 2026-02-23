@@ -2,6 +2,19 @@ const express = require('express');
 const fs = require('fs');
 const path = require('path');
 const app = express();
+
+// CORS for direct browser uploads
+app.use((req, res, next) => {
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', 'GET,POST,DELETE,OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type,X-Filename');
+  if (req.method === 'OPTIONS') return res.sendStatus(204);
+  next();
+});
+
+// Raw body for file uploads (must come before express.json())
+app.use('/upload', express.raw({ type: '*/*', limit: '200mb' }));
+
 app.use(express.json());
 
 const STATE_FILE = '/mnt/shared/hw_state.json';
@@ -79,8 +92,55 @@ app.post('/task/:id/state', (req, res) => {
   pushTransition(task, to, { note: note || null, manual: true });
   task.status = to;
   task[to + '_at'] = new Date().toISOString();
+
+  // Auto-complete parent task when all subtasks finish
+  if (task.parent_task && (to === 'done' || to === 'failed')) {
+    const parent = s.tasks.find(t => t.id === task.parent_task);
+    if (parent && !['done','failed','cancelled'].includes(parent.status)) {
+      const siblings = s.tasks.filter(t => t.parent_task === task.parent_task);
+      const allDone = siblings.every(t => t.status === 'done' || (t.id === task.id && to === 'done'));
+      const anyFailed = siblings.some(t => t.status === 'failed' || (t.id === task.id && to === 'failed'));
+      if (anyFailed) {
+        pushTransition(parent, 'failed', { note: `subtask ${task.id} failed`, manual: true });
+        parent.status = 'failed';
+      } else if (allDone) {
+        pushTransition(parent, 'done', { note: `all ${siblings.length} subtasks complete`, manual: true });
+        parent.status = 'done';
+        parent.done_at = new Date().toISOString();
+      }
+    }
+  }
+
   saveState(s);
   res.json({ ok: true, task });
+});
+
+// Stream task logs from NFS artifact dir
+app.get('/task/:id/logs', (req, res) => {
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  const s = loadState();
+  const task = s.tasks.find(t => t.id === req.params.id);
+  if (!task) return res.status(404).json({ error: 'not found' });
+  const aDir = task.artifact_dir;
+  if (!aDir) return res.json({ logs: '', lines: 0 });
+  const logFile = path.join(aDir.replace(/\/$/, ''), 'run.log');
+  if (!fs.existsSync(logFile)) return res.json({ logs: '', lines: 0 });
+  try {
+    const content = fs.readFileSync(logFile, 'utf8');
+    const lines = content.split('\n');
+    const tail = lines.slice(-200).join('\n');
+    res.json({ logs: tail, lines: lines.length });
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
+// Set artifact_dir on a task (called by orchestrator after planning)
+app.post('/task/:id/artifact', (req, res) => {
+  const s = loadState();
+  const task = s.tasks.find(t => t.id === req.params.id);
+  if (!task) return res.status(404).json({ error: 'not found' });
+  if (req.body.artifact_dir) task.artifact_dir = req.body.artifact_dir;
+  saveState(s);
+  res.json({ ok: true });
 });
 
 // Dashboard API
@@ -189,14 +249,19 @@ app.get('/nfs/file', (req, res) => {
 // File upload to NFS
 const UPLOAD_DIR = "/mnt/shared/uploads";
 app.post("/upload", (req, res) => {
-  const filename = path.basename((req.query.filename || "upload").replace(/\.\./g, ""));
-  const safeFile = filename.replace(/[^a-zA-Z0-9._-]/g, "_");
-  const dest = path.join(UPLOAD_DIR, safeFile);
-  fs.mkdirSync(UPLOAD_DIR, { recursive: true });
-  const stream = fs.createWriteStream(dest);
-  req.pipe(stream);
-  stream.on("finish", () => res.json({ ok: true, path: "uploads/" + safeFile }));
-  stream.on("error", e => res.status(500).json({ error: e.message }));
+  const rawName = req.query.filename || req.headers['x-filename'] || "upload";
+  const filename = path.basename(rawName.replace(/\.\./g, ""));
+  const safeFile = filename.replace(/[^a-zA-Z0-9._\-]/g, "_");
+  // support optional subdirectory via query: ?dir=gtbank_v1
+  const subdir = (req.query.dir || '').replace(/[^a-zA-Z0-9._\-]/g, '_');
+  const destDir = subdir ? path.join(UPLOAD_DIR, subdir) : UPLOAD_DIR;
+  fs.mkdirSync(destDir, { recursive: true });
+  const dest = path.join(destDir, safeFile);
+  try {
+    fs.writeFileSync(dest, req.body);
+    const relPath = subdir ? `uploads/${subdir}/${safeFile}` : `uploads/${safeFile}`;
+    res.json({ ok: true, path: relPath, nfs: `/mnt/shared/${relPath}`, size: req.body.length });
+  } catch(e) { res.status(500).json({ error: e.message }); }
 });
 
 // Skills API

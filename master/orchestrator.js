@@ -140,6 +140,9 @@ tg() { curl -s "https://api.telegram.org/bot$TG_TOKEN/sendMessage" -d chat_id="$
 state() { curl -sX POST "$MASTER/task/$TASK_ID/state" -H 'Content-Type: application/json' -d "{\\"to\\":\\"$1\\",\\"note\\":\\"$2\\"}" > /dev/null 2>&1; }
 
 mkdir -p "$ARTIFACT_DIR/audio"
+# Tee all output to NFS log for dashboard observability
+exec > >(tee -a "$ARTIFACT_DIR/run.log") 2>&1
+echo "[$(date -u +%H:%M:%S)] Starting slideshow task $TASK_ID"
 
 state "installing_deps" "apt-get install ffmpeg python3"
 tg "🔧 *$(hostname)* installing deps..."
@@ -229,6 +232,8 @@ tg() { curl -s "https://api.telegram.org/bot$TG_TOKEN/sendMessage" -d chat_id="$
 state() { curl -sX POST "$MASTER/task/$TASK_ID/state" -H 'Content-Type: application/json' -d "{\\"to\\":\\"$1\\",\\"note\\":\\"$2\\"}" > /dev/null 2>&1; }
 
 mkdir -p "$ARTIFACT_DIR/frames" "$ARTIFACT_DIR/audio"
+exec > >(tee -a "$ARTIFACT_DIR/run.log") 2>&1
+echo "[$(date -u +%H:%M:%S)] Starting render task $TASK_ID"
 
 # Find/copy HTML source
 if [ ! -f "$HTML_SOURCE" ]; then
@@ -651,15 +656,25 @@ Return ONLY raw valid JSON (no markdown fences, no commentary):
       const aDir = (plan.artifact_dir || artifactDir).replace(/\/$/, '');
       fs.mkdirSync(aDir, { recursive: true });
 
+      // Store artifact_dir on parent so /task/:id/logs can find run.log
+      await api(`/task/${task.id}/artifact`, { artifact_dir: aDir });
       await setState(task.id, 'assigning', plan.plan_summary);
       await tg(plan.telegram_message);
 
+      // Also store artifact_dir on the parent task so logs endpoint can find run.log
+      await api(`/task/${task.id}/state`, { to: 'assigning', note: plan.plan_summary });
+
       for (const asgn of plan.worker_assignments || []) {
         const scriptPath = path.join(aDir, `worker-${asgn.worker_id}.sh`);
-        fs.writeFileSync(scriptPath, asgn.script, { mode: 0o755 });
+        // Inject log tee at start of every script (after #!/bin/bash line)
+        let script = asgn.script || '';
+        const setELine = script.indexOf('set -e');
+        const injectAfter = setELine >= 0 ? setELine + 'set -e'.length : script.indexOf('\n') + 1;
+        const logInject = `\nmkdir -p "${aDir}"\nexec > >(tee -a "${aDir}/run.log") 2>&1\necho "[$(date -u +%H:%M:%S)] Worker ${asgn.worker_id} starting role: ${asgn.role}"\n`;
+        script = script.slice(0, injectAfter) + logInject + script.slice(injectAfter);
+        fs.writeFileSync(scriptPath, script, { mode: 0o755 });
         console.log(`[orch] Script → ${scriptPath}`);
 
-        // Create a subtask with 'pending' (not 'queued') so it goes to workers, not orchestrator
         await api('/task', {
           title: `${label} [${asgn.role}]`,
           type: task.type || 'script',
