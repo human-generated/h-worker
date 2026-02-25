@@ -186,6 +186,20 @@ RestartSec=5
 WantedBy=multi-user.target
 EOF
 
+  # ── noVNC index.html (auto-connect redirect) ─────────────────────────────
+  cat > /usr/share/novnc/index.html << 'HTMLEOF'
+<!DOCTYPE html>
+<html>
+<head>
+  <meta http-equiv='refresh' content='0; url=/vnc.html?autoconnect=true&resize=scale&reconnect=true'>
+  <title>H Worker Desktop</title>
+</head>
+<body style='background:#0f172a;color:#38bdf8;font-family:monospace;display:flex;align-items:center;justify-content:center;height:100vh;margin:0'>
+  Connecting to desktop...
+</body>
+</html>
+HTMLEOF
+
   # ── noVNC web proxy (port 6080) ───────────────────────────────────────────
   cat > /etc/systemd/system/novnc.service << 'EOF'
 [Unit]
@@ -491,6 +505,77 @@ print(f'  Workers: {len(d.get(\"workers\",{}))} | Tasks: {len(d.get(\"tasks\",[]
 log "H-Worker fleet deployment — role: ${ROLE}"
 log "Hostname: $(hostname)"
 
+# =============================================================================
+# NANOCLAW SETUP (workers)
+# =============================================================================
+
+function install_nanoclaw_start() {
+  systemctl start nanoclaw-manager || true
+}
+install_nanoclaw() {
+  log "Installing nanoclaw manager..."
+  
+  # Install python3-venv
+  apt-get install -y -qq python3-venv python3-pip 2>/dev/null
+  
+  # Create directories
+  mkdir -p /opt/nanoclaw/agents /usr/local/bin
+  
+  # Install zeroclaw binary
+  SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+  if [[ -f "$SCRIPT_DIR/worker/zeroclaw" ]]; then
+    cp "$SCRIPT_DIR/worker/zeroclaw" /usr/local/bin/zeroclaw
+  elif [[ -f /mnt/shared/scripts/zeroclaw ]]; then
+    cp /mnt/shared/scripts/zeroclaw /usr/local/bin/zeroclaw
+  else
+    warn "zeroclaw not found — skipping binary install"
+  fi
+  [[ -f /usr/local/bin/zeroclaw ]] && chmod +x /usr/local/bin/zeroclaw
+  
+  # Install manager.py
+  if [[ -f "$SCRIPT_DIR/worker/manager.py" ]]; then
+    cp "$SCRIPT_DIR/worker/manager.py" /opt/nanoclaw/manager.py
+  elif [[ -f /mnt/shared/scripts/manager.py ]]; then
+    cp /mnt/shared/scripts/manager.py /opt/nanoclaw/manager.py
+  else
+    warn "manager.py not found — skipping"
+  fi
+  
+  # Create venv and install dependencies
+  python3 -m venv /opt/nanoclaw/venv
+  /opt/nanoclaw/venv/bin/pip install fastapi uvicorn requests 2>&1 | tail -3
+  
+  # Write worker ID env file
+  echo "WORKER_ID=${WORKER_ID}" > /opt/nanoclaw/worker.env
+  
+  # Install systemd service
+  cat > /etc/systemd/system/nanoclaw-manager.service << EOF
+[Unit]
+Description=Nanoclaw Manager API (port 9200)
+After=network.target
+
+[Service]
+ExecStart=/opt/nanoclaw/venv/bin/python3 /opt/nanoclaw/manager.py
+Environment=MANAGER_PORT=9200
+EnvironmentFile=-/opt/nanoclaw/worker.env
+Restart=always
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
+EOF
+  
+  # Open port 9200
+  ufw allow 9200/tcp 2>/dev/null || true
+  
+  systemctl daemon-reload
+  systemctl enable nanoclaw-manager
+  log "nanoclaw-manager installed."
+}
+
+
 install_base
 install_nodejs
 setup_nfs
@@ -498,10 +583,12 @@ setup_nfs
 if [[ "$ROLE" == "worker" ]]; then
   install_desktop
   install_openclaw
+  install_nanoclaw
   setup_vnc_xstartup
   setup_worker_skills
   install_supervisor_script
   setup_worker_services
+  install_nanoclaw_start
   start_worker_services
   check_worker_status
   echo ""

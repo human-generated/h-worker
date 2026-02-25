@@ -1,0 +1,136 @@
+#!/bin/bash
+# zeroclaw — nanoclaw gateway wrapper for openclaw nano-instances
+# Usage:
+#   zeroclaw daemon --host HOST --port PORT --config /path/config.toml
+#   zeroclaw stop --port PORT
+#   zeroclaw status --port PORT
+#   zeroclaw list
+
+OPENCLAW_BASE="/opt/nanoclaw/agents"
+OPENCLAW_BIN="/usr/bin/openclaw"
+
+die() { echo "ERROR: $*" >&2; exit 1; }
+
+cmd="${1:-}"
+shift || true
+
+# Parse flags
+HOST="0.0.0.0"
+PORT=""
+CONFIG=""
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --host) HOST="$2"; shift 2;;
+    --port) PORT="$2"; shift 2;;
+    --config) CONFIG="$2"; shift 2;;
+    *) shift;;
+  esac
+done
+
+case "$cmd" in
+  daemon)
+    [[ -z "$PORT" ]] && die "--port required"
+    STATE_DIR="${OPENCLAW_BASE}/nano-${PORT}"
+    mkdir -p "$STATE_DIR"
+    TOKEN="nanoclaw-${PORT}"
+    LOG="${STATE_DIR}/gateway.log"
+
+    # Convert TOML config to JSON if provided
+    EXTRA_FLAGS=""
+    if [[ -n "$CONFIG" && -f "$CONFIG" ]]; then
+      # Basic TOML->JSON field extraction for openclaw
+      # Extract model, max_tokens etc from TOML if present
+      :
+    fi
+
+    # Check if already running
+    PID_FILE="${STATE_DIR}/gateway.pid"
+    if [[ -f "$PID_FILE" ]]; then
+      PID=$(cat "$PID_FILE")
+      if kill -0 "$PID" 2>/dev/null; then
+        echo "Agent nano-${PORT} already running (pid $PID)"
+        exit 0
+      fi
+    fi
+
+    echo "Starting nanoclaw gateway on port ${PORT} (state: ${STATE_DIR})" | tee -a "$LOG"
+    nohup env \
+      OPENCLAW_STATE_DIR="${STATE_DIR}" \
+      OPENCLAW_GATEWAY_TOKEN="${TOKEN}" \
+      "${OPENCLAW_BIN}" gateway --port "${PORT}" --bind lan --force \
+      >> "$LOG" 2>&1 &
+    PID=$!
+    echo "$PID" > "$PID_FILE"
+    echo "Started nano-${PORT} pid=$PID"
+    ;;
+
+  stop)
+    [[ -z "$PORT" ]] && die "--port required"
+    STATE_DIR="${OPENCLAW_BASE}/nano-${PORT}"
+    PID_FILE="${STATE_DIR}/gateway.pid"
+    if [[ -f "$PID_FILE" ]]; then
+      PID=$(cat "$PID_FILE")
+      if kill -0 "$PID" 2>/dev/null; then
+        kill "$PID" && echo "Stopped nano-${PORT} (pid $PID)"
+      else
+        echo "nano-${PORT} not running (stale pid $PID)"
+      fi
+      rm -f "$PID_FILE"
+    else
+      # Try to find by port
+      pkill -f "openclaw gateway --port ${PORT}" 2>/dev/null && echo "Stopped nano-${PORT}" || echo "nano-${PORT} not found"
+    fi
+    ;;
+
+  status)
+    [[ -z "$PORT" ]] && die "--port required"
+    STATE_DIR="${OPENCLAW_BASE}/nano-${PORT}"
+    PID_FILE="${STATE_DIR}/gateway.pid"
+    if [[ -f "$PID_FILE" ]]; then
+      PID=$(cat "$PID_FILE")
+      if kill -0 "$PID" 2>/dev/null; then
+        echo "nano-${PORT}: running (pid $PID)"
+        exit 0
+      else
+        echo "nano-${PORT}: stopped (stale pid)"
+        exit 1
+      fi
+    else
+      if pgrep -f "openclaw gateway --port ${PORT}" >/dev/null 2>&1; then
+        echo "nano-${PORT}: running (no pid file)"
+        exit 0
+      fi
+      echo "nano-${PORT}: stopped"
+      exit 1
+    fi
+    ;;
+
+  list)
+    echo "=== Active nanoclaw agents ==="
+    mkdir -p "$OPENCLAW_BASE"
+    found=0
+    for dir in "${OPENCLAW_BASE}"/nano-*/; do
+      [[ -d "$dir" ]] || continue
+      port=$(basename "$dir" | sed 's/nano-//')
+      pid_file="${dir}/gateway.pid"
+      if [[ -f "$pid_file" ]]; then
+        pid=$(cat "$pid_file")
+        if kill -0 "$pid" 2>/dev/null; then
+          echo "  nano-${port}: running (pid $pid)"
+          found=$((found+1))
+        else
+          echo "  nano-${port}: stopped (stale pid)"
+        fi
+      else
+        echo "  nano-${port}: no pid file"
+      fi
+    done
+    [[ $found -eq 0 ]] && echo "  (none running)"
+    ;;
+
+  *)
+    echo "Usage: zeroclaw {daemon|stop|status|list} [--host HOST] [--port PORT] [--config CONFIG]"
+    exit 1
+    ;;
+esac

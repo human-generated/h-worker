@@ -1,0 +1,391 @@
+{
+  "uid": "nanoclaw-main",
+  "title": "H-Worker Nanoclaw Fleet",
+  "tags": ["nanoclaw", "h-worker"],
+  "timezone": "browser",
+  "schemaVersion": 38,
+  "version": 1,
+  "refresh": "10s",
+  "time": { "from": "now-1h", "to": "now" },
+  "panels": [
+    {
+      "id": 1,
+      "type": "row",
+      "title": "Fleet Overview",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 0 },
+      "collapsed": false
+    },
+    {
+      "id": 2,
+      "type": "stat",
+      "title": "Workers Online",
+      "gridPos": { "h": 4, "w": 4, "x": 0, "y": 1 },
+      "options": {
+        "reduceOptions": { "calcs": ["lastNotNull"] },
+        "colorMode": "background",
+        "graphMode": "none"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "thresholds": { "mode": "absolute", "steps": [{"color":"red","value":0},{"color":"yellow","value":2},{"color":"green","value":4}] },
+          "color": { "mode": "thresholds" }
+        }
+      },
+      "targets": [
+        {
+          "expr": "count(hw_worker_info)",
+          "legendFormat": "workers",
+          "datasource": "Prometheus"
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "type": "gauge",
+      "title": "Active Nano Agents",
+      "gridPos": { "h": 4, "w": 5, "x": 4, "y": 1 },
+      "options": {
+        "reduceOptions": { "calcs": ["lastNotNull"] },
+        "minVizWidth": 75,
+        "minVizHeight": 75
+      },
+      "fieldConfig": {
+        "defaults": {
+          "min": 0, "max": 400,
+          "thresholds": { "mode": "absolute", "steps": [{"color":"green","value":0},{"color":"yellow","value":200},{"color":"red","value":350}] },
+          "unit": "short"
+        }
+      },
+      "targets": [
+        {
+          "expr": "sum(nanoclaw_agents_active)",
+          "legendFormat": "active agents",
+          "datasource": "Prometheus"
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "type": "stat",
+      "title": "Tasks Running",
+      "gridPos": { "h": 4, "w": 4, "x": 9, "y": 1 },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "background" },
+      "fieldConfig": {
+        "defaults": {
+          "thresholds": { "mode": "absolute", "steps": [{"color":"blue","value":0},{"color":"green","value":1}] },
+          "color": { "mode": "thresholds" }
+        }
+      },
+      "targets": [
+        {
+          "expr": "sum(hw_tasks_total{status=\"running\"})",
+          "legendFormat": "running",
+          "datasource": "Prometheus"
+        }
+      ]
+    },
+    {
+      "id": 5,
+      "type": "stat",
+      "title": "Tasks Done",
+      "gridPos": { "h": 4, "w": 4, "x": 13, "y": 1 },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] } },
+      "fieldConfig": {
+        "defaults": {
+          "thresholds": { "mode": "absolute", "steps": [{"color":"green","value":0}] },
+          "color": { "mode": "thresholds" }
+        }
+      },
+      "targets": [
+        {
+          "expr": "sum(hw_tasks_total{status=\"done\"})",
+          "legendFormat": "done",
+          "datasource": "Prometheus"
+        }
+      ]
+    },
+    {
+      "id": 6,
+      "type": "stat",
+      "title": "Workers Active (heartbeat)",
+      "gridPos": { "h": 4, "w": 4, "x": 17, "y": 1 },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "background" },
+      "fieldConfig": {
+        "defaults": {
+          "thresholds": { "mode": "absolute", "steps": [{"color":"red","value":0},{"color":"green","value":1}] },
+          "color": { "mode": "thresholds" }
+        }
+      },
+      "targets": [
+        {
+          "expr": "hw_workers_active",
+          "legendFormat": "active workers",
+          "datasource": "Prometheus"
+        }
+      ]
+    },
+    {
+      "id": 10,
+      "type": "row",
+      "title": "Per-Worker Nano Agent Pool",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 5 },
+      "collapsed": false
+    },
+    {
+      "id": 11,
+      "type": "bargauge",
+      "title": "Worker 1 (164.90.197.224) Agent Pool",
+      "gridPos": { "h": 5, "w": 6, "x": 0, "y": 6 },
+      "options": {
+        "orientation": "horizontal",
+        "reduceOptions": { "calcs": ["lastNotNull"] },
+        "displayMode": "gradient"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "min": 0, "max": 100,
+          "thresholds": { "mode": "absolute", "steps": [{"color":"green","value":0},{"color":"yellow","value":60},{"color":"red","value":90}] },
+          "color": { "mode": "thresholds" }
+        }
+      },
+      "targets": [
+        {
+          "expr": "nanoclaw_agents_active{worker=~\".*164\\.90\\.197\\.224.*|.*worker.*1.*\"}",
+          "legendFormat": "active",
+          "datasource": "Prometheus"
+        },
+        {
+          "expr": "nanoclaw_agents_total{worker=~\".*164\\.90\\.197\\.224.*|.*worker.*1.*\"}",
+          "legendFormat": "total",
+          "datasource": "Prometheus"
+        }
+      ]
+    },
+    {
+      "id": 12,
+      "type": "bargauge",
+      "title": "Worker 2 (167.99.222.95) Agent Pool",
+      "gridPos": { "h": 5, "w": 6, "x": 6, "y": 6 },
+      "options": {
+        "orientation": "horizontal",
+        "reduceOptions": { "calcs": ["lastNotNull"] },
+        "displayMode": "gradient"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "min": 0, "max": 100,
+          "thresholds": { "mode": "absolute", "steps": [{"color":"green","value":0},{"color":"yellow","value":60},{"color":"red","value":90}] },
+          "color": { "mode": "thresholds" }
+        }
+      },
+      "targets": [
+        {
+          "expr": "nanoclaw_agents_active{worker=~\".*167\\.99\\.222\\.95.*|.*worker.*2.*\"}",
+          "legendFormat": "active",
+          "datasource": "Prometheus"
+        },
+        {
+          "expr": "nanoclaw_agents_total{worker=~\".*167\\.99\\.222\\.95.*|.*worker.*2.*\"}",
+          "legendFormat": "total",
+          "datasource": "Prometheus"
+        }
+      ]
+    },
+    {
+      "id": 13,
+      "type": "bargauge",
+      "title": "Worker 3 (178.128.247.39) Agent Pool",
+      "gridPos": { "h": 5, "w": 6, "x": 12, "y": 6 },
+      "options": {
+        "orientation": "horizontal",
+        "reduceOptions": { "calcs": ["lastNotNull"] },
+        "displayMode": "gradient"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "min": 0, "max": 100,
+          "thresholds": { "mode": "absolute", "steps": [{"color":"green","value":0},{"color":"yellow","value":60},{"color":"red","value":90}] },
+          "color": { "mode": "thresholds" }
+        }
+      },
+      "targets": [
+        {
+          "expr": "nanoclaw_agents_active{worker=~\".*178\\.128\\.247\\.39.*|.*worker.*3.*\"}",
+          "legendFormat": "active",
+          "datasource": "Prometheus"
+        },
+        {
+          "expr": "nanoclaw_agents_total{worker=~\".*178\\.128\\.247\\.39.*|.*worker.*3.*\"}",
+          "legendFormat": "total",
+          "datasource": "Prometheus"
+        }
+      ]
+    },
+    {
+      "id": 14,
+      "type": "bargauge",
+      "title": "Worker 4 (142.93.131.96) Agent Pool",
+      "gridPos": { "h": 5, "w": 6, "x": 18, "y": 6 },
+      "options": {
+        "orientation": "horizontal",
+        "reduceOptions": { "calcs": ["lastNotNull"] },
+        "displayMode": "gradient"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "min": 0, "max": 100,
+          "thresholds": { "mode": "absolute", "steps": [{"color":"green","value":0},{"color":"yellow","value":60},{"color":"red","value":90}] },
+          "color": { "mode": "thresholds" }
+        }
+      },
+      "targets": [
+        {
+          "expr": "nanoclaw_agents_active{worker=~\".*142\\.93\\.131\\.96.*|.*worker.*4.*\"}",
+          "legendFormat": "active",
+          "datasource": "Prometheus"
+        },
+        {
+          "expr": "nanoclaw_agents_total{worker=~\".*142\\.93\\.131\\.96.*|.*worker.*4.*\"}",
+          "legendFormat": "total",
+          "datasource": "Prometheus"
+        }
+      ]
+    },
+    {
+      "id": 20,
+      "type": "row",
+      "title": "Validation Results",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 11 },
+      "collapsed": false
+    },
+    {
+      "id": 21,
+      "type": "table",
+      "title": "Pre-flight Validation Summary",
+      "gridPos": { "h": 6, "w": 24, "x": 0, "y": 12 },
+      "options": {
+        "showHeader": true,
+        "sortBy": [{"displayName": "Worker", "desc": false}]
+      },
+      "fieldConfig": {
+        "overrides": [
+          {
+            "matcher": {"id": "byName", "options": "Value #Pass"},
+            "properties": [{"id": "custom.displayName", "value": "Pass"}, {"id": "color", "value": {"mode": "fixed", "fixedColor": "green"}}]
+          },
+          {
+            "matcher": {"id": "byName", "options": "Value #Fail"},
+            "properties": [{"id": "custom.displayName", "value": "Fail"}, {"id": "color", "value": {"mode": "fixed", "fixedColor": "red"}}]
+          }
+        ]
+      },
+      "targets": [
+        {
+          "expr": "nanoclaw_validations_total{result=\"pass\"}",
+          "legendFormat": "{{worker}} pass",
+          "instant": true,
+          "datasource": "Prometheus"
+        },
+        {
+          "expr": "nanoclaw_validations_total{result=\"fail\"}",
+          "legendFormat": "{{worker}} fail",
+          "instant": true,
+          "datasource": "Prometheus"
+        }
+      ],
+      "transformations": [
+        {"id": "merge", "options": {}},
+        {"id": "labelsToFields", "options": {"valueLabel": "worker"}}
+      ]
+    },
+    {
+      "id": 30,
+      "type": "row",
+      "title": "Task Pipeline",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 18 },
+      "collapsed": false
+    },
+    {
+      "id": 31,
+      "type": "timeseries",
+      "title": "Task Status Over Time",
+      "gridPos": { "h": 6, "w": 24, "x": 0, "y": 19 },
+      "options": {
+        "legend": { "calcs": ["lastNotNull"], "displayMode": "table", "placement": "right" }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": { "drawStyle": "bars", "fillOpacity": 60, "stacking": {"mode": "normal"} },
+          "unit": "short"
+        },
+        "overrides": [
+          {"matcher": {"id": "byName", "options": "done"}, "properties": [{"id": "color", "value": {"mode": "fixed", "fixedColor": "green"}}]},
+          {"matcher": {"id": "byName", "options": "running"}, "properties": [{"id": "color", "value": {"mode": "fixed", "fixedColor": "blue"}}]},
+          {"matcher": {"id": "byName", "options": "failed"}, "properties": [{"id": "color", "value": {"mode": "fixed", "fixedColor": "red"}}]},
+          {"matcher": {"id": "byName", "options": "queued"}, "properties": [{"id": "color", "value": {"mode": "fixed", "fixedColor": "yellow"}}]}
+        ]
+      },
+      "targets": [
+        {
+          "expr": "hw_tasks_total",
+          "legendFormat": "{{status}}",
+          "datasource": "Prometheus"
+        }
+      ]
+    },
+    {
+      "id": 40,
+      "type": "row",
+      "title": "Artifacts",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 25 },
+      "collapsed": false
+    },
+    {
+      "id": 41,
+      "type": "table",
+      "title": "Artifact Sizes",
+      "gridPos": { "h": 7, "w": 24, "x": 0, "y": 26 },
+      "options": { "showHeader": true },
+      "fieldConfig": {
+        "defaults": { "unit": "bytes" },
+        "overrides": [
+          {"matcher": {"id": "byName", "options": "Value"}, "properties": [{"id": "custom.displayName", "value": "Size"}]}
+        ]
+      },
+      "targets": [
+        {
+          "expr": "hw_artifact_size_bytes",
+          "legendFormat": "{{task_id}} / {{artifact}}",
+          "instant": true,
+          "datasource": "Prometheus"
+        }
+      ],
+      "transformations": [
+        {"id": "labelsToFields", "options": {"valueLabel": "artifact"}},
+        {"id": "organize", "options": {"renameByName": {"Time": "Timestamp"}}}
+      ]
+    },
+    {
+      "id": 50,
+      "type": "row",
+      "title": "Agent Connections",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 33 },
+      "collapsed": false
+    },
+    {
+      "id": 51,
+      "type": "nodeGraph",
+      "title": "H-Worker → Nano Agent Connections",
+      "gridPos": { "h": 10, "w": 24, "x": 0, "y": 34 },
+      "options": {},
+      "targets": [
+        {
+          "expr": "nanoclaw_agents_total",
+          "legendFormat": "{{worker}}",
+          "instant": true,
+          "datasource": "Prometheus"
+        }
+      ]
+    }
+  ]
+}

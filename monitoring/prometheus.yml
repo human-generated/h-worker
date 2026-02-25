@@ -1,0 +1,18 @@
+global:
+  scrape_interval: 10s
+  evaluation_interval: 10s
+
+scrape_configs:
+  - job_name: nanoclaw
+    static_configs:
+      - targets:
+        - 164.90.197.224:9200
+        - 167.99.222.95:9200
+        - 178.128.247.39:9200
+        - 142.93.131.96:9200
+    metrics_path: /metrics
+
+  - job_name: hw_master
+    static_configs:
+      - targets: ['159.65.205.244:9201']
+    metrics_path: /metrics

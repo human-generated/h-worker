@@ -121,10 +121,9 @@ app.get('/task/:id/logs', (req, res) => {
   const s = loadState();
   const task = s.tasks.find(t => t.id === req.params.id);
   if (!task) return res.status(404).json({ error: 'not found' });
-  const aDir = task.artifact_dir;
-  if (!aDir) return res.json({ logs: '', lines: 0 });
-  const logFile = path.join(aDir.replace(/\/$/, ''), 'run.log');
-  if (!fs.existsSync(logFile)) return res.json({ logs: '', lines: 0 });
+  // Use per-worker log if available, fall back to shared run.log
+  const logFile = task.worker_log || (task.artifact_dir ? path.join(task.artifact_dir.replace(/\/$/, ''), 'run.log') : null);
+  if (!logFile || !fs.existsSync(logFile)) return res.json({ logs: '', lines: 0 });
   try {
     const content = fs.readFileSync(logFile, 'utf8');
     const lines = content.split('\n');
@@ -165,6 +164,19 @@ app.post('/task', (req, res) => {
   res.json({ task });
 });
 
+// API keys (shared via NFS so all workers can read)
+const KEYS_FILE = '/mnt/shared/keys.json';
+function loadKeys() {
+  try { return JSON.parse(fs.readFileSync(KEYS_FILE, 'utf8')); } catch { return {}; }
+}
+app.get('/config/keys', (req, res) => res.json(loadKeys()));
+app.post('/config/keys', (req, res) => {
+  const current = loadKeys();
+  const updated = { ...current, ...req.body };
+  fs.writeFileSync(KEYS_FILE, JSON.stringify(updated, null, 2));
+  res.json({ ok: true, keys: Object.keys(updated) });
+});
+
 // Linear token storage
 const LINEAR_TOKEN_FILE = '/opt/hw-master/linear_token.json';
 app.get('/config/linear-token', (req, res) => {
@@ -183,7 +195,7 @@ const { exec } = require('child_process');
 app.post('/deploy/dashboard', (req, res) => {
   res.json({ ok: true, message: 'Deploying...' });
   exec(
-    `VERCEL_TOKEN=${process.env.VERCEL_TOKEN} /usr/local/bin/vercel deploy --prod --token ${process.env.VERCEL_TOKEN} --scope ${process.env.VERCEL_SCOPE} --yes`,
+    `/usr/bin/vercel deploy --prod --token ${process.env.VERCEL_TOKEN} --scope ${process.env.VERCEL_SCOPE} --yes`,
     { cwd: '/opt/hw-dashboard' },
     (err, stdout, stderr) => {
       const log = stdout + stderr;

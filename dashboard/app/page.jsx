@@ -280,15 +280,71 @@ function StateMachineGraph({ currentStatus, transitions = [] }) {
   );
 }
 
-// ── Task Window ───────────────────────────────────────────────────────────────
-function TaskWindow({ taskId, initialTask, onClose, offsetIndex }) {
-  const [task, setTask] = useState(initialTask);
+// ── Worker Log Panel (live-polling per subtask) ───────────────────────────────
+function WorkerLogPanel({ subtaskId, workerLabel, status, onRetry }) {
   const [logs, setLogs] = useState('');
-  const [logsVisible, setLogsVisible] = useState(false);
-  const logsRef = useRef(null);
-  const [pos, setPos] = useState({ x: 120 + offsetIndex * 24, y: 100 + offsetIndex * 24 });
+  const ref = useRef(null);
+  const sc = stateTheme(status).stroke;
+  const TERMINAL = new Set(['done','failed','cancelled','canceled','error']);
+  const isTerminal = TERMINAL.has(status);
+
+  useEffect(() => {
+    async function fetchLogs() {
+      try {
+        const r = await fetch(`/api/task/${subtaskId}/logs`);
+        const d = await r.json();
+        if (d.logs !== undefined) {
+          setLogs(d.logs);
+          if (ref.current) ref.current.scrollTop = ref.current.scrollHeight;
+        }
+      } catch {}
+    }
+    fetchLogs();
+    const t = setInterval(fetchLogs, 2000);
+    return () => clearInterval(t);
+  }, [subtaskId]);
+
+  async function retry() {
+    await fetch(`/api/task/${subtaskId}`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ to: 'pending' }),
+    });
+    if (onRetry) onRetry();
+  }
+
+  return (
+    <div style={{ marginBottom: '0.75rem', border: '1px solid rgba(0,0,0,0.06)', borderRadius: '2px', overflow: 'hidden' }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', padding: '0.35rem 0.6rem', background: T.bg }}>
+        <span style={{ width: 7, height: 7, borderRadius: '50%', background: sc, display: 'inline-block', flexShrink: 0 }} />
+        <span style={{ fontFamily: T.mono, fontSize: '0.68rem', fontWeight: 600, color: T.text }}>{workerLabel}</span>
+        <span style={{ fontFamily: T.mono, fontSize: '0.62rem', color: sc }}>{status}</span>
+        {isTerminal && (
+          <button onClick={retry} style={{ marginLeft: 'auto', background: 'none', border: '1px solid rgba(0,0,0,0.15)', borderRadius: '2px', padding: '1px 8px', fontSize: '0.62rem', fontFamily: T.mono, cursor: 'pointer', color: T.muted }}>↺ retry</button>
+        )}
+      </div>
+      <div ref={ref} style={{
+        background: '#0D0D0D', color: '#6CEFA0', fontFamily: T.mono, fontSize: '0.68rem',
+        lineHeight: 1.55, padding: '0.5rem 0.6rem',
+        maxHeight: '180px', overflowY: 'auto', whiteSpace: 'pre-wrap', wordBreak: 'break-all',
+      }}>
+        {logs || <span style={{ color: '#444' }}>(waiting for output...)</span>}
+      </div>
+    </div>
+  );
+}
+
+// ── Task Window ───────────────────────────────────────────────────────────────
+function TaskWindow({ taskId, initialTask, onClose, offsetIndex, allTasks }) {
+  const [task, setTask] = useState(initialTask);
+  const [pos, setPos] = useState({ x: 120 + offsetIndex * 24, y: 80 + offsetIndex * 24 });
   const [dragging, setDragging] = useState(false);
   const [dragOffset, setDragOffset] = useState({ x: 0, y: 0 });
+  const [logsVisible, setLogsVisible] = useState(false);
+  const [ownLogs, setOwnLogs] = useState('');
+  const ownLogsRef = useRef(null);
+
+  const subtasks = (allTasks || []).filter(t => t.parent_task === taskId);
+  const isParent = subtasks.length > 0;
 
   async function refresh() {
     try {
@@ -300,31 +356,31 @@ function TaskWindow({ taskId, initialTask, onClose, offsetIndex }) {
 
   async function transition(to) {
     await fetch(`/api/task/${taskId}`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ to }),
     });
     refresh();
   }
 
-  useEffect(() => { refresh(); const t = setInterval(refresh, 6000); return () => clearInterval(t); }, [taskId]);
+  useEffect(() => { refresh(); const t = setInterval(refresh, 5000); return () => clearInterval(t); }, [taskId]);
 
+  // Own logs (for subtasks or single-worker tasks)
   useEffect(() => {
-    if (!logsVisible) return;
+    if (!logsVisible || isParent) return;
     async function fetchLogs() {
       try {
         const r = await fetch(`/api/task/${taskId}/logs`);
         const d = await r.json();
         if (d.logs !== undefined) {
-          setLogs(d.logs);
-          if (logsRef.current) logsRef.current.scrollTop = logsRef.current.scrollHeight;
+          setOwnLogs(d.logs);
+          if (ownLogsRef.current) ownLogsRef.current.scrollTop = ownLogsRef.current.scrollHeight;
         }
       } catch {}
     }
     fetchLogs();
     const t = setInterval(fetchLogs, 2000);
     return () => clearInterval(t);
-  }, [taskId, logsVisible]);
+  }, [taskId, logsVisible, isParent]);
 
   useEffect(() => {
     if (!dragging) return;
@@ -336,19 +392,15 @@ function TaskWindow({ taskId, initialTask, onClose, offsetIndex }) {
   }, [dragging, dragOffset]);
 
   const onDragStart = e => { setDragging(true); setDragOffset({ x: e.clientX - pos.x, y: e.clientY - pos.y }); e.preventDefault(); };
-
   const sc = stateTheme(task?.status).stroke;
   const transitions = task?.transitions || [];
-
   const TERMINAL = new Set(['done','failed','cancelled','canceled','error']);
   const isTerminal = task && TERMINAL.has(task.status);
-  const canCancel = task && !isTerminal;
-  const canRetry  = task && isTerminal;
-  const canFail   = task && !isTerminal;
 
   return (
     <div style={{
-      position: 'fixed', left: pos.x, top: pos.y, zIndex: 999, width: 540,
+      position: 'fixed', left: pos.x, top: pos.y, zIndex: 999,
+      width: isParent ? 620 : 540,
       background: T.card, border: T.border, borderRadius: '4px',
       boxShadow: '0 16px 60px rgba(0,0,0,0.14)', userSelect: 'none',
     }}>
@@ -360,7 +412,9 @@ function TaskWindow({ taskId, initialTask, onClose, offsetIndex }) {
       }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
           <span style={{ width: 8, height: 8, borderRadius: '50%', background: sc, display: 'inline-block', flexShrink: 0 }} />
-          <span style={{ fontFamily: T.mono, fontSize: '0.72rem', color: T.muted }}>task · {taskId?.slice(-8)}</span>
+          <span style={{ fontFamily: T.mono, fontSize: '0.72rem', color: T.muted }}>
+            {isParent ? `task · ${taskId?.slice(-8)} · ${subtasks.length} workers` : `task · ${taskId?.slice(-8)}`}
+          </span>
         </div>
         <button onMouseDown={e => e.stopPropagation()} onClick={onClose}
           style={{ background: 'none', border: 'none', color: T.muted, cursor: 'pointer', fontSize: '1.1rem', lineHeight: 1, padding: '0 2px' }}>
@@ -368,61 +422,79 @@ function TaskWindow({ taskId, initialTask, onClose, offsetIndex }) {
         </button>
       </div>
 
-      <div style={{ padding: '1rem' }}>
-        {/* Description */}
-        <div style={{ fontFamily: T.ui, fontSize: '0.95rem', fontWeight: 500, marginBottom: '0.35rem' }}>
-          {task?.description || '…'}
+      <div style={{ padding: '1rem', maxHeight: '85vh', overflowY: 'auto' }}>
+        {/* Title + meta */}
+        <div style={{ fontFamily: T.ui, fontSize: '0.95rem', fontWeight: 600, marginBottom: '0.2rem' }}>
+          {task?.title || task?.description || '…'}
         </div>
-        <div style={{ fontFamily: T.mono, fontSize: '0.7rem', color: T.muted, marginBottom: '1.25rem' }}>
-          {task?.worker && <span style={{ marginRight: '1rem' }}>worker: {task.worker}</span>}
-          {task?.created_at && <span>created: {task.created_at.slice(0,19).replace('T',' ')}</span>}
+        {task?.title && task?.description && task.title !== task.description && (
+          <div style={{ fontFamily: T.mono, fontSize: '0.75rem', color: T.muted, marginBottom: '0.2rem' }}>{task.description}</div>
+        )}
+        <div style={{ fontFamily: T.mono, fontSize: '0.68rem', color: 'rgba(0,0,0,0.3)', marginBottom: '1rem' }}>
+          {task?.created_at?.slice(0,19).replace('T',' ')}
+          {task?.worker && <span style={{ marginLeft: '1rem' }}>worker: {task.worker}</span>}
         </div>
 
-        {/* State machine graph */}
-        <div style={{ marginBottom: '1.25rem' }}>
+        {/* State machine */}
+        <div style={{ marginBottom: '1rem' }}>
           <div style={S.sectionTitle}>State Machine</div>
           <StateMachineGraph currentStatus={task?.status} transitions={transitions} />
         </div>
 
-        {/* Transition timeline */}
+        {/* History */}
         {transitions.length > 0 && (
-          <div style={{ marginBottom: '1.25rem' }}>
+          <div style={{ marginBottom: '1rem' }}>
             <div style={S.sectionTitle}>History</div>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.35rem' }}>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.3rem' }}>
               {transitions.map((tr, i) => (
-                <div key={i} style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', fontFamily: T.mono, fontSize: '0.7rem' }}>
-                  <span style={{ color: 'rgba(0,0,0,0.25)', width: 60, flexShrink: 0 }}>{tr.at?.slice(11,19)}</span>
+                <div key={i} style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', fontFamily: T.mono, fontSize: '0.68rem' }}>
+                  <span style={{ color: 'rgba(0,0,0,0.25)', width: 58, flexShrink: 0 }}>{tr.at?.slice(11,19)}</span>
                   <span style={{ color: tr.from ? stateTheme(tr.from).stroke : 'rgba(0,0,0,0.2)' }}>{tr.from||'—'}</span>
                   <span style={{ color: 'rgba(0,0,0,0.25)' }}>→</span>
                   <span style={{ color: stateTheme(tr.to).stroke, fontWeight: 600 }}>{tr.to}</span>
-                  {tr.worker && <span style={{ color: 'rgba(0,0,0,0.3)' }}>via {tr.worker}</span>}
-                  {tr.note && <span style={{ color: T.muted }}>{tr.note}</span>}
-                  {tr.manual && <span style={{ background: '#FEF3C7', color: '#78350F', padding: '0px 4px', borderRadius: '2px', fontSize: '0.62rem' }}>manual</span>}
+                  {tr.note && <span style={{ color: T.muted, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: 180 }}>{tr.note}</span>}
                 </div>
               ))}
             </div>
           </div>
         )}
 
-        {/* Logs panel */}
-        {logsVisible && (
-          <div style={{ marginBottom: '1rem' }}>
-            <div style={{ ...S.sectionTitle, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-              <span>Run Log</span>
-              <span style={{ color: 'rgba(0,0,0,0.3)', fontSize: '0.6rem' }}>{logs ? logs.split('\n').length + ' lines' : 'empty'}</span>
-            </div>
-            <div ref={logsRef} style={{ ...S.code, maxHeight: '260px', fontSize: '0.7rem', lineHeight: 1.6, background: '#0D0D0D', color: '#6CEFA0', overflowY: 'auto' }}>
-              {logs || '(no output yet)'}
+        {/* Per-worker live logs (parent tasks) */}
+        {isParent && (
+          <div style={{ marginBottom: '0.75rem' }}>
+            <div style={S.sectionTitle}>Worker Logs (live)</div>
+            {subtasks.map(st => (
+              <WorkerLogPanel
+                key={st.id}
+                subtaskId={st.id}
+                workerLabel={`${(st.assigned_worker||'').replace('hw-worker-','w')} · ${st.description || st.title || st.id.slice(-6)}`}
+                status={st.status}
+                onRetry={refresh}
+              />
+            ))}
+          </div>
+        )}
+
+        {/* Own logs (subtask or single-worker) */}
+        {!isParent && logsVisible && (
+          <div style={{ marginBottom: '0.75rem' }}>
+            <div style={S.sectionTitle}>Run Log</div>
+            <div ref={ownLogsRef} style={{
+              background: '#0D0D0D', color: '#6CEFA0', fontFamily: T.mono, fontSize: '0.7rem',
+              lineHeight: 1.6, padding: '0.5rem 0.6rem', borderRadius: '2px',
+              maxHeight: '240px', overflowY: 'auto', whiteSpace: 'pre-wrap', wordBreak: 'break-all',
+            }}>
+              {ownLogs || <span style={{ color: '#444' }}>(no output yet)</span>}
             </div>
           </div>
         )}
 
         {/* Actions */}
         <div style={{ display: 'flex', gap: '0.5rem', borderTop: T.border, paddingTop: '0.75rem', flexWrap: 'wrap' }}>
-          {canRetry  && <button style={S.btn} onClick={() => transition('pending')}>↺ retry</button>}
-          {canFail   && <button style={{ ...S.btnGhost, color: T.red, borderColor: T.red+'44' }} onClick={() => transition('failed')}>mark failed</button>}
-          {canCancel && <button style={S.btnGhost} onClick={() => transition('cancelled')}>cancel</button>}
-          <button style={{ ...S.btnGhost }} onClick={() => setLogsVisible(v => !v)}>{logsVisible ? '▲ logs' : '▼ logs'}</button>
+          {isTerminal && <button style={S.btn} onClick={() => transition('pending')}>↺ retry</button>}
+          {!isTerminal && <button style={{ ...S.btnGhost, color: T.red, borderColor: T.red+'44' }} onClick={() => transition('failed')}>mark failed</button>}
+          {!isTerminal && <button style={S.btnGhost} onClick={() => transition('cancelled')}>cancel</button>}
+          {!isParent && <button style={S.btnGhost} onClick={() => setLogsVisible(v => !v)}>{logsVisible ? '▲ logs' : '▼ logs'}</button>}
           <button style={{ ...S.btnGhost, marginLeft: 'auto' }} onClick={refresh}>↺</button>
         </div>
       </div>
@@ -430,9 +502,196 @@ function TaskWindow({ taskId, initialTask, onClose, offsetIndex }) {
   );
 }
 
+// ── Settings Tab ──────────────────────────────────────────────────────────────
+const SECRET_DEFS = [
+  { key: 'elevenlabs', label: 'ElevenLabs API Key', placeholder: 'sk_...', hint: 'Text-to-speech' },
+  { key: 'wavespeed',  label: 'WaveSpeed API Key',  placeholder: 'ws_...', hint: 'AI video generation' },
+  { key: 'openai',     label: 'OpenAI API Key',     placeholder: 'sk-...', hint: 'GPT models' },
+  { key: 'anthropic',  label: 'Anthropic API Key',  placeholder: 'sk-ant-...', hint: 'Claude (orchestrator)' },
+];
+function SettingsTab() {
+  const [keys, setKeys] = useState({});
+  const [editing, setEditing] = useState(null);
+  const [draft, setDraft] = useState('');
+  const [saving, setSaving] = useState(false);
+  const [msg, setMsg] = useState('');
+
+  useEffect(() => {
+    fetch('/api/config/keys').then(r => r.json()).then(d => setKeys(d || {})).catch(() => {});
+  }, []);
+
+  async function save(k) {
+    setSaving(true); setMsg('');
+    try {
+      const r = await fetch('/api/config/keys', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ [k]: draft }),
+      });
+      const d = await r.json();
+      if (d.ok) { setKeys(prev => ({ ...prev, [k]: draft })); setEditing(null); setMsg('Saved.'); setTimeout(() => setMsg(''), 2000); }
+    } finally { setSaving(false); }
+  }
+
+  return (
+    <div>
+      <div style={{ ...S.section, maxWidth: 560 }}>
+        <div style={S.sectionTitle}>Secrets</div>
+        <div style={{ ...S.card, display: 'flex', flexDirection: 'column', gap: '1.1rem' }}>
+          <div style={{ fontFamily: T.mono, fontSize: '0.68rem', color: T.muted }}>
+            Stored in <code>/mnt/shared/keys.json</code> — available to all workers via NFS.
+          </div>
+          {SECRET_DEFS.map(({ key: k, label, placeholder, hint }) => {
+            const val = keys[k] || '';
+            const isEdit = editing === k;
+            return (
+              <div key={k}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.35rem' }}>
+                  <span style={{ fontFamily: T.mono, fontSize: '0.72rem', fontWeight: 600 }}>{label}</span>
+                  <span style={{ fontFamily: T.mono, fontSize: '0.62rem', color: T.muted }}>{hint}</span>
+                  <span style={{ width: 7, height: 7, borderRadius: '50%', background: val ? '#22C55E' : '#E5E7EB', display: 'inline-block', marginLeft: 'auto', flexShrink: 0 }} />
+                </div>
+                {isEdit ? (
+                  <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
+                    <input autoFocus style={{ ...S.input, fontSize: '0.8rem', flex: 1 }}
+                      value={draft} onChange={e => setDraft(e.target.value)}
+                      placeholder={placeholder}
+                      onKeyDown={e => { if (e.key === 'Enter') save(k); if (e.key === 'Escape') setEditing(null); }} />
+                    <button style={{ ...S.btn, padding: '0.35rem 0.9rem' }} onClick={() => save(k)} disabled={saving}>save</button>
+                    <button style={{ ...S.btnGhost, padding: '0.35rem 0.75rem' }} onClick={() => setEditing(null)}>cancel</button>
+                  </div>
+                ) : (
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+                    <code style={{ fontFamily: T.mono, fontSize: '0.75rem', color: val ? T.text : 'rgba(0,0,0,0.25)', flex: 1 }}>
+                      {val ? val.slice(0, 12) + '···' + val.slice(-4) : 'not set'}
+                    </code>
+                    <button style={{ ...S.btnGhost, padding: '0.25rem 0.75rem', fontSize: '0.68rem' }}
+                      onClick={() => { setEditing(k); setDraft(val); }}>edit</button>
+                  </div>
+                )}
+              </div>
+            );
+          })}
+          {msg && <div style={{ fontFamily: T.mono, fontSize: '0.7rem', color: '#22C55E' }}>{msg}</div>}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ── Workers Tab ───────────────────────────────────────────────────────────────
+// ── Nanoclaw Section ──────────────────────────────────────────────────────────
+function NanoclawSection() {
+  const [pool, setPool] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [spawning, setSpawning] = useState({});
+  const [validations, setValidations] = useState([]);
+
+  async function fetchPool() {
+    try {
+      const r = await fetch('/api/nanoclaw/pool');
+      const d = await r.json();
+      setPool(d);
+    } catch {}
+    setLoading(false);
+  }
+
+  useEffect(() => { fetchPool(); const t = setInterval(fetchPool, 8000); return () => clearInterval(t); }, []);
+
+  async function spawnAgent(workerIp) {
+    setSpawning(s => ({ ...s, [workerIp]: true }));
+    try {
+      const r = await fetch(`http://159.65.205.244:3000/nanoclaw/pool`, { method: 'GET' });
+      // Spawn via direct worker call
+      await fetch(`http://${workerIp}:9200/agents`, { method: 'POST', headers: { 'Content-Type': 'application/json' } });
+      await fetchPool();
+    } catch (e) { alert('Spawn failed: ' + e.message); }
+    setSpawning(s => ({ ...s, [workerIp]: false }));
+  }
+
+  if (loading) return <div style={{ color: T.muted, fontFamily: T.mono, fontSize: '0.78rem', padding: '1rem' }}>loading nanoclaw pool...</div>;
+  if (!pool) return null;
+
+  const workers = pool.workers || [];
+  const totalActive = pool.active_agents || 0;
+  const totalAgents = pool.total_agents || 0;
+
+  return (
+    <div style={S.section}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.75rem' }}>
+        <div style={S.sectionTitle}>Nanoclaw Agent Pool ({totalActive} active / {totalAgents} total)</div>
+        <a href="http://159.65.205.244:3001" target="_blank" rel="noreferrer"
+          style={{ color: T.blue, fontSize: '0.7rem', fontFamily: T.mono, textDecoration: 'none', border: `1px solid ${T.blue}`, padding: '2px 8px', borderRadius: T.radius }}>
+          Grafana ↗
+        </a>
+      </div>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(280px,1fr))', gap: '1rem' }}>
+        {workers.map(w => {
+          const agents = w.agents || [];
+          const active = agents.filter(a => a.state === 'running');
+          const stopped = agents.filter(a => a.state !== 'running');
+          const pct = Math.min(100, (active.length / 100) * 100);
+          return (
+            <div key={w.ip} style={{ ...S.card, borderLeft: `3px solid ${w.ok ? T.blue : T.red}` }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <span style={{ fontFamily: T.mono, fontSize: '0.82rem', fontWeight: 600 }}>{w.worker || w.ip}</span>
+                <span style={{ fontFamily: T.mono, fontSize: '0.68rem', color: T.muted }}>{w.ip}</span>
+              </div>
+
+              {/* Agent pool bar */}
+              <div style={{ marginTop: '0.5rem', marginBottom: '0.5rem' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.68rem', fontFamily: T.mono, color: T.muted, marginBottom: '3px' }}>
+                  <span>{active.length} active / 100 slots</span>
+                  <span>{pct.toFixed(0)}%</span>
+                </div>
+                <div style={{ background: 'rgba(0,0,0,0.06)', borderRadius: '2px', height: '6px', overflow: 'hidden' }}>
+                  <div style={{ width: `${pct}%`, height: '100%', background: pct > 80 ? T.red : pct > 50 ? T.orange : T.blue, borderRadius: '2px', transition: 'width 0.3s' }} />
+                </div>
+              </div>
+
+              {/* Active agent list */}
+              {active.length > 0 && (
+                <div style={{ borderTop: T.border, paddingTop: '0.5rem', marginTop: '0.25rem' }}>
+                  {active.slice(0, 5).map(a => (
+                    <div key={a.port} style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', fontSize: '0.68rem', fontFamily: T.mono, padding: '2px 0' }}>
+                      <span style={{ width: 6, height: 6, borderRadius: '50%', background: T.mint, flexShrink: 0 }} />
+                      <span style={{ color: T.blue }}>:{a.port}</span>
+                      <span style={{ color: T.muted, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                        {a.current_task || 'idle'}
+                      </span>
+                    </div>
+                  ))}
+                  {active.length > 5 && <div style={{ fontSize: '0.62rem', color: T.muted, fontFamily: T.mono }}>+{active.length - 5} more</div>}
+                </div>
+              )}
+
+              {!w.ok && <div style={{ color: T.red, fontSize: '0.68rem', fontFamily: T.mono, marginTop: '0.3rem' }}>offline: {w.error}</div>}
+
+              <div style={{ marginTop: '0.6rem' }}>
+                <button
+                  onClick={() => spawnAgent(w.ip)}
+                  disabled={spawning[w.ip] || !w.ok}
+                  style={{ ...S.btnGhost, fontSize: '0.68rem', padding: '3px 10px', opacity: spawning[w.ip] ? 0.5 : 1 }}>
+                  {spawning[w.ip] ? 'spawning...' : '+ spawn agent'}
+                </button>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+
+      {/* Prometheus link */}
+      <div style={{ marginTop: '0.75rem', fontSize: '0.68rem', fontFamily: T.mono, color: 'rgba(0,0,0,0.25)' }}>
+        Metrics: <a href="http://159.65.205.244:9090" target="_blank" rel="noreferrer" style={{ color: T.muted, textDecoration: 'none' }}>Prometheus ↗</a>
+        {' '} · {' '}
+        <a href="http://159.65.205.244:3001/d/nanoclaw-main" target="_blank" rel="noreferrer" style={{ color: T.muted, textDecoration: 'none' }}>Grafana Dashboard ↗</a>
+      </div>
+    </div>
+  );
+}
+
 function WorkersTab({ workers }) {
   const [tasks, setTasks] = useState([]);
+  const [newTaskTitle, setNewTaskTitle] = useState('');
   const [newTask, setNewTask] = useState('');
   const [newTaskSource, setNewTaskSource] = useState('');
   const [uploadStatus, setUploadStatus] = useState('');
@@ -482,15 +741,16 @@ function WorkersTab({ workers }) {
   async function addTask() {
     if (!newTask.trim()) return;
     const extra = newTaskSource.trim() ? { source_url: newTaskSource.trim() } : {};
-    await fetch('/api/task', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ title: newTask, description: newTask, status: 'queued', extra }) });
-    setNewTask(''); setNewTaskSource(''); setUploadStatus(''); fetchTasks();
+    const title = newTaskTitle.trim() || newTask.trim().slice(0, 60);
+    await fetch('/api/task', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ title, description: newTask, status: 'queued', extra }) });
+    setNewTaskTitle(''); setNewTask(''); setNewTaskSource(''); setUploadStatus(''); fetchTasks();
   }
 
   return (
     <div>
       {openDesktops.map(w => <DesktopWindow key={w.id} worker={w} onClose={() => closeDesktop(w.id)} />)}
       {openTaskWindows.map((t, i) => (
-        <TaskWindow key={t.id} taskId={t.id} initialTask={t} onClose={() => closeTaskWindow(t.id)} offsetIndex={i} />
+        <TaskWindow key={t.id} taskId={t.id} initialTask={t} onClose={() => closeTaskWindow(t.id)} offsetIndex={i} allTasks={tasks} />
       ))}
 
       <div style={S.section}>
@@ -572,6 +832,10 @@ function WorkersTab({ workers }) {
         <div style={S.sectionTitle}>Assign Task</div>
         <div style={{ ...S.card, display: 'flex', flexDirection: 'column', gap: '0.6rem' }}>
           <div style={{ display: 'flex', gap: '0.75rem', alignItems: 'flex-end' }}>
+            <input style={{ ...S.input, fontWeight: '600', fontSize: '0.9rem' }} value={newTaskTitle} onChange={e => setNewTaskTitle(e.target.value)}
+              onKeyDown={e => e.key === 'Enter' && addTask()} placeholder="task title..." />
+          </div>
+          <div style={{ display: 'flex', gap: '0.75rem', alignItems: 'flex-end' }}>
             <input style={S.input} value={newTask} onChange={e => setNewTask(e.target.value)}
               onKeyDown={e => e.key === 'Enter' && addTask()} placeholder="task description..." />
             <button style={{ ...S.btn, flexShrink: 0 }} onClick={addTask}>Assign</button>
@@ -597,7 +861,7 @@ function WorkersTab({ workers }) {
           <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.78rem', fontFamily: T.mono }}>
             <thead>
               <tr style={{ color: T.muted, textAlign: 'left', borderBottom: T.border }}>
-                {['ID','Description','Status','Worker','Time'].map(h => (
+                {['ID','Task','Status','Workers','Time'].map(h => (
                   <th key={h} style={{ padding: '0.6rem 0.75rem', fontWeight: 500, fontSize: '0.6rem', textTransform: 'uppercase', letterSpacing: '0.08em' }}>{h}</th>
                 ))}
               </tr>
@@ -606,7 +870,9 @@ function WorkersTab({ workers }) {
               {tasks.slice(0,50).map(t => {
                 const isOpen = openTaskWindows.some(w => w.id === t.id);
                 const sc = stateTheme(t.status).stroke;
-                const label = t.title || t.description || '—';
+                // Subtasks assigned to this parent
+                const subtaskWorkers = t.parent_task ? [] :
+                  [...new Set(tasks.filter(s => s.parent_task === t.id && s.assigned_worker).map(s => s.assigned_worker))];
                 return (
                   <tr key={t.id}
                     onClick={() => openTaskWindow(t)}
@@ -614,10 +880,16 @@ function WorkersTab({ workers }) {
                     onMouseEnter={e => { if (!isOpen) e.currentTarget.style.background = T.bg; }}
                     onMouseLeave={e => { e.currentTarget.style.background = isOpen ? '#F0F9FF' : ''; }}>
                     <td style={{ padding: '0.45rem 0.75rem', color: 'rgba(0,0,0,0.25)' }}>{t.id.slice(-6)}</td>
-                    <td style={{ padding: '0.45rem 0.75rem', maxWidth: 280, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                      {t.parent_task && <span style={{ fontSize: '0.6rem', color: T.muted, marginRight: 4 }}>↳</span>}
-                      {label}
-                      {t.assigned_worker && <span style={{fontSize:'0.6rem',background:'#FEF3C7',color:'#78350F',padding:'1px 4px',borderRadius:'2px',marginLeft:'4px'}}>{t.assigned_worker.replace('hw-worker-','w')}</span>}
+                    <td style={{ padding: '0.45rem 0.75rem', maxWidth: 280 }}>
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 4, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                          {t.parent_task && <span style={{ fontSize: '0.6rem', color: T.muted, flexShrink: 0 }}>↳</span>}
+                          <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontWeight: t.title && !t.parent_task ? 600 : 400 }}>{t.title || t.description || '—'}</span>
+                        </div>
+                        {t.title && t.description && t.title !== t.description && (
+                          <div style={{ fontSize: '0.68rem', color: T.muted, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{t.description}</div>
+                        )}
+                      </div>
                     </td>
                     <td style={{ padding: '0.45rem 0.75rem' }}>
                       <span style={{ display: 'inline-flex', alignItems: 'center', gap: '0.35rem' }}>
@@ -625,7 +897,17 @@ function WorkersTab({ workers }) {
                         <span style={{ color: sc }}>{t.status}</span>
                       </span>
                     </td>
-                    <td style={{ padding: '0.45rem 0.75rem', color: T.muted }}>{t.worker||'—'}</td>
+                    <td style={{ padding: '0.45rem 0.75rem' }}>
+                      {subtaskWorkers.length > 0
+                        ? <span style={{ display: 'flex', gap: 3, flexWrap: 'wrap' }}>
+                            {subtaskWorkers.map(w => (
+                              <span key={w} style={{fontSize:'0.6rem',background:'#FEF3C7',color:'#78350F',padding:'1px 5px',borderRadius:'2px',fontFamily:T.mono,fontWeight:600}}>{w.replace('hw-worker-','w')}</span>
+                            ))}
+                          </span>
+                        : t.assigned_worker
+                          ? <span style={{fontSize:'0.6rem',background:'#FEF3C7',color:'#78350F',padding:'1px 5px',borderRadius:'2px',fontFamily:T.mono,fontWeight:600}}>{t.assigned_worker.replace('hw-worker-','w')}</span>
+                          : <span style={{ color: 'rgba(0,0,0,0.25)' }}>—</span>}
+                    </td>
                     <td style={{ padding: '0.45rem 0.75rem', color: 'rgba(0,0,0,0.3)' }}>{t.created_at?.slice(11,19)}</td>
                   </tr>
                 );
@@ -635,6 +917,7 @@ function WorkersTab({ workers }) {
           {!tasks.length && <div style={{ color: 'rgba(0,0,0,0.2)', padding: '1rem 0.75rem', fontFamily: T.mono, fontSize: '0.78rem' }}>No tasks yet.</div>}
         </div>
       </div>
+      <NanoclawSection />
     </div>
   );
 }
@@ -1212,7 +1495,7 @@ function LinearTab() {
 export default function Dashboard() {
   const [tab, setTab] = useState('workers');
   const [workers, setWorkers] = useState([]);
-  const tabs = [['workers','Workers'],['skills','Skills'],['nfs','NFS Share'],['linear','Linear']];
+  const tabs = [['workers','Workers'],['skills','Skills'],['nfs','NFS Share'],['linear','Linear'],['settings','Settings']];
 
   useEffect(() => {
     async function poll() {
@@ -1240,7 +1523,8 @@ export default function Dashboard() {
       {tab==='workers' && <WorkersTab workers={workers} />}
       {tab==='skills'  && <SkillsTab workers={workers} />}
       {tab==='nfs'     && <NFSTab />}
-      {tab==='linear'  && <LinearTab />}
+      {tab==='linear'   && <LinearTab />}
+      {tab==='settings' && <SettingsTab />}
     </div>
   );
 }
