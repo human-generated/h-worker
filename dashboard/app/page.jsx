@@ -1537,7 +1537,7 @@ function LinearTab() {
 export default function Dashboard() {
   const [tab, setTab] = useState('workers');
   const [workers, setWorkers] = useState([]);
-  const tabs = [['workers','Workers'],['skills','Skills'],['nfs','NFS Share'],['linear','Linear'],['settings','Settings']];
+  const tabs = [['workers','Workers'],['skills','Skills'],['nfs','NFS Share'],['linear','Linear'],['observability','Observability'],['settings','Settings']];
 
   useEffect(() => {
     async function poll() {
@@ -1552,16 +1552,10 @@ export default function Dashboard() {
     <div style={S.page}>
       <div style={S.header}>
         <Logo />
-        <div style={{ display: 'flex', gap: '1rem', alignItems: 'center' }}>
-          <a href="http://159.65.205.244:3001" target="_blank" rel="noreferrer"
-            style={{ color: T.blue, fontSize: '0.7rem', textDecoration: 'none', fontFamily: T.mono, border: `1px solid ${T.blue}`, padding: '3px 10px', borderRadius: T.radius, fontWeight: 600 }}>
-            Observability ↗
-          </a>
-          <a href="https://github.com/human-generated/h-worker" target="_blank"
-            style={{ color: T.muted, fontSize: '0.7rem', textDecoration: 'none', fontFamily: T.mono }}>
-            github →
-          </a>
-        </div>
+        <a href="https://github.com/human-generated/h-worker" target="_blank"
+          style={{ color: T.muted, fontSize: '0.7rem', textDecoration: 'none', fontFamily: T.mono }}>
+          github →
+        </a>
       </div>
       <div style={S.tabs}>
         {tabs.map(([id,label]) => (
@@ -1572,6 +1566,25 @@ export default function Dashboard() {
       {tab==='skills'  && <SkillsTab workers={workers} />}
       {tab==='nfs'     && <NFSTab />}
       {tab==='linear'   && <LinearTab />}
+      {tab==='observability' && (
+        <div style={{ textAlign: 'center', padding: '3rem 1rem' }}>
+          <div style={{ color: T.muted, fontFamily: T.mono, fontSize: '0.82rem', marginBottom: '1.5rem' }}>
+            Opening Grafana observability dashboard…
+          </div>
+          <a href="http://159.65.205.244:3001/d/nanoclaw-main/h-worker-nanoclaw-fleet"
+            target="_blank" rel="noreferrer"
+            style={{ color: T.blue, fontFamily: T.mono, fontSize: '0.9rem', border: `1px solid ${T.blue}`, padding: '0.6rem 1.5rem', borderRadius: T.radius, textDecoration: 'none', fontWeight: 600 }}>
+            Open Grafana ↗
+          </a>
+          <div style={{ marginTop: '2rem' }}>
+            <iframe
+              src="http://159.65.205.244:3001/d/nanoclaw-main/h-worker-nanoclaw-fleet?kiosk=tv&refresh=10s"
+              style={{ width: '100%', height: '80vh', border: 'none', borderRadius: T.radius, background: '#111' }}
+              title="Grafana Dashboard"
+            />
+          </div>
+        </div>
+      )}
       {tab==='settings' && <SettingsTab />}
     </div>
   );
