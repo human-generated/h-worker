@@ -583,6 +583,7 @@ function SettingsTab() {
 function NanoclawSection() {
   const [pool, setPool] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [poolStale, setPoolStale] = useState(false);
   const [spawning, setSpawning] = useState({});
   const [dryRunning, setDryRunning] = useState(false);
   const [dryRunResult, setDryRunResult] = useState(null);
@@ -591,8 +592,17 @@ function NanoclawSection() {
     try {
       const r = await fetch('/api/nanoclaw/pool');
       const d = await r.json();
-      setPool(d);
-    } catch {}
+      // Only update if we got a valid response with workers array (not an error blob)
+      if (d && Array.isArray(d.workers) && !d.error) {
+        setPool(d);
+        setPoolStale(false);
+      } else {
+        // Keep last known good state, just mark as stale
+        setPoolStale(true);
+      }
+    } catch {
+      setPoolStale(true);
+    }
     setLoading(false);
   }
 
@@ -641,7 +651,10 @@ function NanoclawSection() {
   return (
     <div style={S.section}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.75rem', flexWrap: 'wrap', gap: '0.5rem' }}>
-        <div style={S.sectionTitle}>Nanoclaw Agent Pool ({totalActive} active / {totalAgents} total)</div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem' }}>
+          <div style={S.sectionTitle}>Nanoclaw Agent Pool ({totalActive} active / {totalAgents} total)</div>
+          {poolStale && <span style={{ fontSize: '0.62rem', fontFamily: T.mono, color: T.orange, border: `1px solid ${T.orange}`, padding: '1px 6px', borderRadius: T.radius }}>stale</span>}
+        </div>
         <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
           <button onClick={dryRun20} disabled={dryRunning}
             style={{ ...S.btnGhost, fontSize: '0.68rem', padding: '3px 10px', opacity: dryRunning ? 0.5 : 1 }}>
@@ -706,7 +719,7 @@ function NanoclawSection() {
                 </div>
               )}
 
-              {!w.ok && <div style={{ color: T.red, fontSize: '0.68rem', fontFamily: T.mono, marginTop: '0.3rem' }}>offline: {w.error}</div>}
+              {!w.ok && <div style={{ color: T.orange, fontSize: '0.62rem', fontFamily: T.mono, marginTop: '0.3rem', opacity: 0.7 }}>⚠ unreachable (showing last known)</div>}
 
               <div style={{ marginTop: '0.6rem' }}>
                 <button
@@ -738,7 +751,7 @@ function WorkersTab({ workers }) {
   const [newTaskSource, setNewTaskSource] = useState('');
   const [uploadStatus, setUploadStatus] = useState('');
   const [hover, setHover] = useState(null);
-  const [hoverTs, setHoverTs] = useState({});
+  const [screenshotTs, setScreenshotTs] = useState(Date.now());
   const [openDesktops, setOpenDesktops] = useState([]);
   const [openTaskWindows, setOpenTaskWindows] = useState([]);
   const [ts, setTs] = useState('');
@@ -752,12 +765,13 @@ function WorkersTab({ workers }) {
     } catch {}
   }
   useEffect(() => { fetchTasks(); const t = setInterval(fetchTasks, 5000); return () => clearInterval(t); }, []);
+  useEffect(() => { const t = setInterval(() => setScreenshotTs(Date.now()), 12000); return () => clearInterval(t); }, []);
 
   function openDesktop(worker) {
     setOpenDesktops(prev => prev.find(w => w.id === worker.id) ? prev : [...prev, worker]);
   }
   function closeDesktop(id) { setOpenDesktops(prev => prev.filter(w => w.id !== id)); }
-  function handleCardEnter(workerId) { setHover(workerId); setHoverTs(prev => ({ ...prev, [workerId]: Date.now() })); }
+  function handleCardEnter(workerId) { setHover(workerId); }
 
   function openTaskWindow(task) {
     setOpenTaskWindows(prev => prev.find(t => t.id === task.id) ? prev : [...prev, task]);
@@ -800,8 +814,6 @@ function WorkersTab({ workers }) {
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill,minmax(280px,1fr))', gap: '1rem' }}>
           {workers.map(w => {
             const color = statusColor(w);
-            const isHovered = hover === w.id;
-            const screenshotTs = hoverTs[w.id] || 0;
             return (
               <div key={w.id}
                 style={{ ...S.card, borderLeft: `3px solid ${color}`, position: 'relative' }}
@@ -820,17 +832,11 @@ function WorkersTab({ workers }) {
                   <div style={{ color: 'rgba(0,0,0,0.2)', fontSize: '0.68rem' }}>{w.updated_at?.slice(11,19)} utc</div>
                 </div>
 
-                {/* Screenshot preview */}
-                <div style={{
-                  marginTop: '0.75rem', overflow: 'hidden', borderRadius: T.radius,
-                  height: isHovered ? 160 : 0, transition: 'height 0.15s ease',
-                  background: T.bg, border: isHovered ? T.border : 'none',
-                }}>
-                  {screenshotTs > 0 && (
-                    <img src={`/api/screenshot?ip=${w.ip}&t=${screenshotTs}`} alt="preview"
-                      style={{ width: '100%', height: '160px', objectFit: 'cover', display: 'block' }}
-                      onError={e => { e.target.style.opacity = '0.1'; }} />
-                  )}
+                {/* Screenshot — always visible, refreshes every 12s */}
+                <div style={{ marginTop: '0.75rem', overflow: 'hidden', borderRadius: T.radius, background: '#0F172A', border: T.border }}>
+                  <img src={`/api/screenshot?ip=${w.ip}&t=${screenshotTs}`} alt="desktop"
+                    style={{ width: '100%', height: '160px', objectFit: 'cover', display: 'block' }}
+                    onError={e => { e.target.style.opacity = '0.15'; }} />
                 </div>
 
                 {/* Skills */}
