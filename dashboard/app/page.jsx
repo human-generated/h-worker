@@ -584,7 +584,8 @@ function NanoclawSection() {
   const [pool, setPool] = useState(null);
   const [loading, setLoading] = useState(true);
   const [spawning, setSpawning] = useState({});
-  const [validations, setValidations] = useState([]);
+  const [dryRunning, setDryRunning] = useState(false);
+  const [dryRunResult, setDryRunResult] = useState(null);
 
   async function fetchPool() {
     try {
@@ -600,12 +601,34 @@ function NanoclawSection() {
   async function spawnAgent(workerIp) {
     setSpawning(s => ({ ...s, [workerIp]: true }));
     try {
-      const r = await fetch(`http://159.65.205.244:3000/nanoclaw/pool`, { method: 'GET' });
-      // Spawn via direct worker call
-      await fetch(`http://${workerIp}:9200/agents`, { method: 'POST', headers: { 'Content-Type': 'application/json' } });
+      const r = await fetch('/api/nanoclaw/spawn', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ worker_ip: workerIp, count: 1 }),
+      });
+      const d = await r.json();
+      if (!d.ok) throw new Error(d.error || 'spawn failed');
       await fetchPool();
     } catch (e) { alert('Spawn failed: ' + e.message); }
     setSpawning(s => ({ ...s, [workerIp]: false }));
+  }
+
+  async function dryRun20() {
+    setDryRunning(true);
+    setDryRunResult(null);
+    try {
+      // 5 agents per worker across all 4 workers = 20 total
+      const r = await fetch('/api/nanoclaw/spawn', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ count: 5 }),  // no worker_ip = all workers
+      });
+      const d = await r.json();
+      const total = (d.results || []).reduce((s, w) => s + w.spawned.filter(a => a.ok).length, 0);
+      setDryRunResult({ ok: d.ok, total, results: d.results });
+      await fetchPool();
+    } catch (e) { setDryRunResult({ ok: false, error: e.message }); }
+    setDryRunning(false);
   }
 
   if (loading) return <div style={{ color: T.muted, fontFamily: T.mono, fontSize: '0.78rem', padding: '1rem' }}>loading nanoclaw pool...</div>;
@@ -617,13 +640,32 @@ function NanoclawSection() {
 
   return (
     <div style={S.section}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.75rem' }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.75rem', flexWrap: 'wrap', gap: '0.5rem' }}>
         <div style={S.sectionTitle}>Nanoclaw Agent Pool ({totalActive} active / {totalAgents} total)</div>
-        <a href="http://159.65.205.244:3001" target="_blank" rel="noreferrer"
-          style={{ color: T.blue, fontSize: '0.7rem', fontFamily: T.mono, textDecoration: 'none', border: `1px solid ${T.blue}`, padding: '2px 8px', borderRadius: T.radius }}>
-          Grafana ↗
-        </a>
+        <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
+          <button onClick={dryRun20} disabled={dryRunning}
+            style={{ ...S.btnGhost, fontSize: '0.68rem', padding: '3px 10px', opacity: dryRunning ? 0.5 : 1 }}>
+            {dryRunning ? 'spawning...' : 'dry run 20 agents'}
+          </button>
+        </div>
       </div>
+      {dryRunResult && (
+        <div style={{ ...S.card, marginBottom: '0.75rem', padding: '0.6rem 0.9rem', background: dryRunResult.ok ? '#F0FDF4' : '#FFF1F2', border: `1px solid ${dryRunResult.ok ? '#BBF7D0' : '#FECDD3'}` }}>
+          {dryRunResult.ok
+            ? <span style={{ color: '#15803D', fontFamily: T.mono, fontSize: '0.75rem' }}>✓ spawned {dryRunResult.total} agents across {(dryRunResult.results||[]).length} workers</span>
+            : <span style={{ color: T.red, fontFamily: T.mono, fontSize: '0.75rem' }}>✗ {dryRunResult.error}</span>
+          }
+          {dryRunResult.results && (
+            <div style={{ marginTop: '0.3rem', display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
+              {dryRunResult.results.map(r => (
+                <span key={r.ip} style={{ fontSize: '0.65rem', fontFamily: T.mono, color: T.muted }}>
+                  {r.ip.split('.').slice(-1)[0]}: {r.spawned.filter(a=>a.ok).length}/{r.spawned.length} ok
+                </span>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(280px,1fr))', gap: '1rem' }}>
         {workers.map(w => {
           const agents = w.agents || [];
@@ -1510,10 +1552,16 @@ export default function Dashboard() {
     <div style={S.page}>
       <div style={S.header}>
         <Logo />
-        <a href="https://github.com/human-generated/h-worker" target="_blank"
-          style={{ color: T.muted, fontSize: '0.7rem', textDecoration: 'none', fontFamily: T.mono }}>
-          github →
-        </a>
+        <div style={{ display: 'flex', gap: '1rem', alignItems: 'center' }}>
+          <a href="http://159.65.205.244:3001" target="_blank" rel="noreferrer"
+            style={{ color: T.blue, fontSize: '0.7rem', textDecoration: 'none', fontFamily: T.mono, border: `1px solid ${T.blue}`, padding: '3px 10px', borderRadius: T.radius, fontWeight: 600 }}>
+            Observability ↗
+          </a>
+          <a href="https://github.com/human-generated/h-worker" target="_blank"
+            style={{ color: T.muted, fontSize: '0.7rem', textDecoration: 'none', fontFamily: T.mono }}>
+            github →
+          </a>
+        </div>
       </div>
       <div style={S.tabs}>
         {tabs.map(([id,label]) => (
