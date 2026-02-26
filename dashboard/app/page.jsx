@@ -1849,7 +1849,7 @@ function SandboxTab() {
               <div style={{ flex: 1, minHeight: 400 }}>
                 <iframe
                   key={sb.id}
-                  src={`/api/sandbox/${sb.id}/proxy/`}
+                  src={`/api/sandbox/${sb.id}/proxy`}
                   style={{ width: '100%', height: '100%', minHeight: 400, border: `1px solid ${T.border.split(' ').pop()}`, borderRadius: T.radius, background: '#111' }}
                   title={sb.title}
                 />

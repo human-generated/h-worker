@@ -35,7 +35,7 @@ async function proxyRequest(req, id, pathParts, method, bodyBuffer) {
 
   if (ct.includes('text/html')) {
     let html = await resp.text();
-    const proxyBase = `/api/sandbox/${id}/proxy/`;
+    const proxyBase = `/api/sandbox/${id}/proxy/`; // trailing slash needed for <base href> relative resolution
     // Inject base tag so relative URLs work
     html = html.replace(/<head([^>]*)>/i, `<head$1><base href="${proxyBase}">`);
     // Rewrite absolute fetch('/api/ calls to go through proxy
