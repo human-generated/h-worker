@@ -411,8 +411,28 @@ app.post('/sandboxes/:id/chat', async (req, res) => {
   let sb = sbs[req.params.id];
   if (!sb) return res.status(404).json({ error: 'sandbox not found' });
 
-  const userMsg = req.body.message;
-  sb.messages.push({ role: 'user', content: userMsg });
+  const userMsg = req.body.message || '';
+  const imageUrls = req.body.image_urls || []; // array of base64 data URIs or http URLs
+
+  // Build content for this user message (text + optional images)
+  let userContent;
+  if (imageUrls.length > 0) {
+    userContent = [{ type: 'text', text: userMsg }];
+    for (const imgUrl of imageUrls) {
+      if (imgUrl.startsWith('data:')) {
+        const match = imgUrl.match(/^data:(image\/[^;]+);base64,(.+)$/);
+        if (match) {
+          userContent.push({ type: 'image', source: { type: 'base64', media_type: match[1], data: match[2] } });
+        }
+      } else {
+        userContent.push({ type: 'image', source: { type: 'url', url: imgUrl } });
+      }
+    }
+  } else {
+    userContent = userMsg;
+  }
+
+  sb.messages.push({ role: 'user', content: userContent });
   sb.status = 'building';
   sb.log = sb.log || [];
   sb.log.push({ tool: 'user', result: userMsg, at: new Date().toISOString() });
@@ -511,11 +531,16 @@ When given a description, build a complete working application:
 3. Use deploy("server.js") to start the app on port ${freshSb0.port} (always use PORT=${freshSb0.port} in server.js: const PORT = process.env.PORT || ${freshSb0.port}).
 4. Use suggest_workers with 3 specific worker agents with bash scripts using the real URL http://${SANDBOX_WORKER}:${freshSb0.port}.
 
-Make the apps visually polished with a dark professional UI (dark background, colored accents). Include real data, real API endpoints that actually work with in-memory state. The frontend should poll the APIs every 2-3 seconds to show live updates.
+Make the apps visually STUNNING with a dark professional UI: dark background (#0a0a0f), colored accents (blue #3b82f6, green #22c55e, amber #f59e0b, red #ef4444), glass-morphism cards, smooth CSS animations, gradients, status indicators. Include real data structures, real API endpoints with proper in-memory state, realistic mock data (names, IDs, timestamps). The frontend should auto-poll APIs every 2-3 seconds for live updates. Use CSS grid/flexbox for professional layouts. Add charts/stats using pure CSS (no charting libs). Aim for a product that looks like it could ship.
+
+If the user sends follow-up requests, iterate on the EXISTING files — rewrite only what needs to change, keep what works. You have the full conversation history.
 
 Sandbox ID: ${freshSb0.id}, Port: ${freshSb0.port}, Worker: ${SANDBOX_WORKER}`;
 
-  let apiMessages = [{ role: 'user', content: userMsg }];
+  // Use full conversation history for ongoing chat context
+  const freshSbForHistory = loadSandboxes()[sb.id] || sb;
+  let apiMessages = freshSbForHistory.messages.filter(m => m.role === 'user' || m.role === 'assistant');
+  if (apiMessages.length === 0) apiMessages = [{ role: 'user', content: userContent }];
   let finalText = '';
 
   function addLog(tool, result) {

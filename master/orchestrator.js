@@ -11,10 +11,15 @@ const TG_TOKEN      = '8202032261:AAFiptoYDpznIbnSvyjPrftsyteVMXcFUz8';
 const TG_CHAT       = '-5166727984';
 const ARTIFACT_BASE = '/mnt/shared/artifacts';
 const KEY_FILE      = '/opt/hw-master/anthropic_key.json';
+const NFS_KEYS_FILE = '/mnt/shared/keys.json';
 
 function getKey() {
   try { return JSON.parse(fs.readFileSync(KEY_FILE, 'utf8')).key; } catch {}
   return process.env.ANTHROPIC_API_KEY || '';
+}
+
+function getNfsKeys() {
+  try { return JSON.parse(fs.readFileSync(NFS_KEYS_FILE, 'utf8')); } catch { return {}; }
 }
 
 async function tg(text) {
@@ -41,11 +46,14 @@ async function setState(taskId, to, note) {
 async function claude(prompt) {
   const key = getKey();
   if (!key) throw new Error('No ANTHROPIC_API_KEY — set it in ' + KEY_FILE);
+  const isOAuth = key.startsWith('sk-ant-oat');
   const res = await fetch('https://api.anthropic.com/v1/messages', {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
-      'x-api-key': key,
+      ...(isOAuth
+        ? { 'Authorization': `Bearer ${key}`, 'anthropic-beta': 'oauth-2025-04-20' }
+        : { 'x-api-key': key }),
       'anthropic-version': '2023-06-01',
     },
     body: JSON.stringify({
@@ -126,7 +134,7 @@ ffmpeg -y -loop 1 -i "${aDir}/img${i}.png" -i "$ARTIFACT_DIR/audio/slide${i}.mp3
 
       const script = `#!/bin/bash
 set -e
-TASK_ID="${taskId}"
+TASK_ID="\${1:-${taskId}}"
 MASTER="http://159.65.205.244:3000"
 ARTIFACT_DIR="${aDir}"
 OUT_VIDEO="${outVideo}"
@@ -140,7 +148,6 @@ tg() { curl -s "https://api.telegram.org/bot$TG_TOKEN/sendMessage" -d chat_id="$
 state() { curl -sX POST "$MASTER/task/$TASK_ID/state" -H 'Content-Type: application/json' -d "{\\"to\\":\\"$1\\",\\"note\\":\\"$2\\"}" > /dev/null 2>&1; }
 
 mkdir -p "$ARTIFACT_DIR/audio"
-# Tee all output to NFS log for dashboard observability
 exec > >(tee -a "$ARTIFACT_DIR/run.log") 2>&1
 echo "[$(date -u +%H:%M:%S)] Starting slideshow task $TASK_ID"
 
@@ -203,8 +210,8 @@ tg "✅ *Slideshow* complete on \`$(hostname)\`
     }
   }
 
-  // HTML → Video render plan
-  if (type === 'render' || desc.includes('video') || desc.includes('render') || desc.includes('slide')) {
+  // HTML → Video render plan — ONLY if type is explicitly 'render' and html_source is provided
+  if (type === 'render' && extra.html_source) {
     const htmlSource = extra.html_source || '';
     const taskId = task.id;
     const aDir = artifactDir;
@@ -218,7 +225,7 @@ tg "✅ *Slideshow* complete on \`$(hostname)\`
     if (elevenlabsKey) {
       const script = `#!/bin/bash
 set -e
-TASK_ID="${taskId}"
+TASK_ID="\${1:-${taskId}}"
 MASTER="http://159.65.205.244:3000"
 ARTIFACT_DIR="${aDir}"
 HTML_SOURCE="${htmlSource}"
@@ -582,6 +589,10 @@ async function orchestrate() {
         .join('\n') || '  • hw-worker-1 (164.90.197.224) — available';
 
       const artifactDir = `${ARTIFACT_BASE}/${task.id}-${slugify(label)}`;
+      const nfsKeys = getNfsKeys();
+      const keysInfo = Object.entries(nfsKeys)
+        .map(([k, v]) => `  ${k}: ${v ? v.slice(0, 8) + '...' : '(not set)'}  (full value in /mnt/shared/keys.json)`)
+        .join('\n') || '  (none configured)';
 
       const prompt = `You are the master orchestrator for a fleet of Ubuntu 22.04 worker VMs.
 
@@ -595,12 +606,25 @@ Extra: ${JSON.stringify(task.extra || {})}
 ## AVAILABLE WORKERS
 ${workerInfo}
 
+## API KEYS (stored at /mnt/shared/keys.json on NFS — readable by all workers)
+${keysInfo}
+Load keys at the TOP of any script that needs them:
+  ELEVENLABS_KEY=$(python3 -c "import json; print(json.load(open('/mnt/shared/keys.json')).get('elevenlabs',''))")
+  [ -z "$ELEVENLABS_KEY" ] && { report "failed" "ElevenLabs key missing from /mnt/shared/keys.json"; exit 1; }
+STRICT RULES — violation = task failure:
+  - NEVER generate fake/placeholder audio (no sine waves, no anullsrc, no silent MP3 placeholders)
+  - NEVER use solid colour video as a fallback (no color=c=green, no lavfi colour sources)
+  - If ElevenLabs API returns empty/error body, exit 1 immediately — do not continue
+  - If frame screenshots are empty, exit 1 — do not encode a blank video
+  - Workers signal readiness via sentinel files: touch ${artifactDir}/X_ready
+
 ## ENVIRONMENT
 - OS: Ubuntu 22.04, bash, Node.js 22, npm, apt-get (run non-interactive)
 - NFS at /mnt/shared/ on all nodes (read/write)
 - Artifact dir for this task: ${artifactDir}/
+- Each worker MUST write logs to its own file: ${artifactDir}/run-WORKERID.log
+  (e.g. exec > >(tee -a "${artifactDir}/run-hw-worker-1.log") 2>&1)
 - MASTER API: http://159.65.205.244:3000
-- Task ID for state reporting: ${task.id}
 - TG bot token: 8202032261:AAFiptoYDpznIbnSvyjPrftsyteVMXcFUz8
 - TG chat: -5166727984
 
@@ -613,12 +637,22 @@ curl -sX POST http://159.65.205.244:3000/task/${task.id}/state -H 'Content-Type:
 curl -s "https://api.telegram.org/bot8202032261:AAFiptoYDpznIbnSvyjPrftsyteVMXcFUz8/sendMessage" -d chat_id=-5166727984 -d text="MESSAGE" -d parse_mode=Markdown
 
 ## YOUR JOB
-1. Break the task into worker roles (usually 1–3 workers)
-2. For each worker write a complete bash script that:
+1. Assign a DISTINCT role to EVERY available worker — all must run in parallel with real work.
+   Use sentinel files (touch ARTIFACT_DIR/X_ready) so dependent workers can poll and wait.
+   Example for "narrated HTML slides video" across 4 workers:
+     Worker 1 (content_generator): create all HTML/CSS slides from scratch → touch ARTIFACT_DIR/slides_ready
+     Worker 2 (audio_producer): load ELEVENLABS_KEY from /mnt/shared/keys.json → call API for each slide narration → save audio/slideN.mp3 → touch ARTIFACT_DIR/audio_ready. Exit 1 if key missing or any API call returns empty file.
+     Worker 3 (renderer): poll until ARTIFACT_DIR/slides_ready exists (max 5min, sleep 10) → puppeteer screenshot each HTML slide into frames/frameNNNNN.png → touch ARTIFACT_DIR/frames_ready
+     Worker 4 (encoder): poll until ARTIFACT_DIR/audio_ready AND ARTIFACT_DIR/frames_ready exist (max 10min) → ffmpeg combine frames+audio → output.mp4
+2. For each worker write a COMPLETE, SELF-CONTAINED bash script that:
    - Starts with #!/bin/bash and set -e
-   - Reports descriptive states at every step: installing_deps → downloading → processing → encoding → uploading → done
+   - GENERATES all required files from scratch — never use find to locate pre-existing files unless they are explicitly provided in the task's "extra" field
+   - Reports descriptive states at every step via curl to the SUBTASK ID (passed as arg 1): e.g. installing_deps → generating → rendering → encoding → done
+   - IMPORTANT: The TASK_ID for state reporting must be the subtask's own ID, passed as argument 1:
+     TASK_ID="\${1}"
+     report() { curl -sX POST http://159.65.205.244:3000/task/\$TASK_ID/state -H 'Content-Type: application/json' -d "{\\"to\\":\\"\$1\\",\\"note\\":\\"\$2\\"}" 2>/dev/null || true; }
    - Saves all output to ${artifactDir}/
-   - Reports done (or failed) at the end
+   - Reports done (or failed with note) at the end
    - Sends telegram milestones
 3. Decide which states the task flows through — this is shown in the UI state machine
 4. Write a human-friendly telegram plan announcement
@@ -631,8 +665,8 @@ Return ONLY raw valid JSON (no markdown fences, no commentary):
   "worker_assignments": [
     {
       "worker_id": "hw-worker-1",
-      "role": "renderer",
-      "script": "#!/bin/bash\\nset -e\\n# full script\\n..."
+      "role": "generator",
+      "script": "#!/bin/bash\\nset -e\\nTASK_ID=\\"\\${1}\\"\\n# full script that generates all files from scratch\\n..."
     }
   ]
 }`;
@@ -661,19 +695,19 @@ Return ONLY raw valid JSON (no markdown fences, no commentary):
       await setState(task.id, 'assigning', plan.plan_summary);
       await tg(plan.telegram_message);
 
-      // Also store artifact_dir on the parent task so logs endpoint can find run.log
-      await api(`/task/${task.id}/state`, { to: 'assigning', note: plan.plan_summary });
-
       for (const asgn of plan.worker_assignments || []) {
         const scriptPath = path.join(aDir, `worker-${asgn.worker_id}.sh`);
-        // Inject log tee at start of every script (after #!/bin/bash line)
+        const workerLog = `${aDir}/run-${asgn.worker_id}.log`;
+        // Inject per-worker log tee after set -e, overriding any exec > already in script
         let script = asgn.script || '';
+        // Remove any existing exec > tee injections (Claude might have added one)
+        script = script.replace(/exec\s*>\s*>\(tee[^\n]*\)\s*2>&1\n?/g, '');
         const setELine = script.indexOf('set -e');
         const injectAfter = setELine >= 0 ? setELine + 'set -e'.length : script.indexOf('\n') + 1;
-        const logInject = `\nmkdir -p "${aDir}"\nexec > >(tee -a "${aDir}/run.log") 2>&1\necho "[$(date -u +%H:%M:%S)] Worker ${asgn.worker_id} starting role: ${asgn.role}"\n`;
+        const logInject = `\nmkdir -p "${aDir}"\nexec > >(tee -a "${workerLog}") 2>&1\necho "[$(date -u +%H:%M:%S)] Worker ${asgn.worker_id} starting role: ${asgn.role}"\n`;
         script = script.slice(0, injectAfter) + logInject + script.slice(injectAfter);
         fs.writeFileSync(scriptPath, script, { mode: 0o755 });
-        console.log(`[orch] Script → ${scriptPath}`);
+        console.log(`[orch] Script → ${scriptPath} (log: ${workerLog})`);
 
         await api('/task', {
           title: `${label} [${asgn.role}]`,
@@ -683,6 +717,7 @@ Return ONLY raw valid JSON (no markdown fences, no commentary):
           parent_task: task.id,
           assigned_worker: asgn.worker_id,
           artifact_dir: aDir,
+          worker_log: workerLog,
           status: 'pending',
         });
       }
