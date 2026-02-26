@@ -28,8 +28,20 @@ async function proxyRequest(req, id, pathParts, method, bodyBuffer) {
   }
 
   let resp;
-  try { resp = await fetch(targetUrl, fetchOpts); }
-  catch (e) { return new Response(`Proxy error: ${e.message}`, { status: 502 }); }
+  try { resp = await fetch(targetUrl, { ...fetchOpts, signal: AbortSignal.timeout(10000) }); }
+  catch (e) {
+    // App is down/starting — return auto-refresh page so iframe recovers automatically
+    const errHtml = `<!DOCTYPE html><html><head><meta charset="utf-8">
+<meta http-equiv="refresh" content="4">
+<style>body{margin:0;background:#0a0a0f;color:#888;font-family:monospace;display:flex;align-items:center;justify-content:center;height:100vh;flex-direction:column;gap:12px}
+.dot{display:inline-block;animation:blink 1s infinite}.dot:nth-child(2){animation-delay:.3s}.dot:nth-child(3){animation-delay:.6s}
+@keyframes blink{0%,100%{opacity:0.2}50%{opacity:1}}</style></head>
+<body><div style="color:#3b82f6;font-size:0.9rem">App starting up<span class="dot">.</span><span class="dot">.</span><span class="dot">.</span></div>
+<div style="font-size:0.72rem;color:#555">Auto-refreshing every 4s &nbsp;·&nbsp; ${e.message}</div>
+<button onclick="location.reload()" style="margin-top:8px;background:#1e293b;border:1px solid #334155;color:#94a3b8;padding:6px 16px;border-radius:6px;cursor:pointer;font-family:monospace;font-size:0.72rem">Reload now</button>
+</body></html>`;
+    return new Response(errHtml, { status: 200, headers: { 'Content-Type': 'text/html; charset=utf-8', 'X-Frame-Options': 'ALLOWALL', 'Content-Security-Policy': 'frame-ancestors *' } });
+  }
 
   const ct = resp.headers.get('content-type') || 'text/plain';
 

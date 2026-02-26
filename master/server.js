@@ -533,6 +533,12 @@ When given a description, build a complete working application:
 
 Make the apps visually STUNNING with a dark professional UI: dark background (#0a0a0f), colored accents (blue #3b82f6, green #22c55e, amber #f59e0b, red #ef4444), glass-morphism cards, smooth CSS animations, gradients, status indicators. Include real data structures, real API endpoints with proper in-memory state, realistic mock data (names, IDs, timestamps). The frontend should auto-poll APIs every 2-3 seconds for live updates. Use CSS grid/flexbox for professional layouts. Add charts/stats using pure CSS (no charting libs). Aim for a product that looks like it could ship.
 
+CRITICAL CODING RULES to avoid syntax errors:
+- NEVER use backtick template literals inside Express res.send() or res.json() HTML strings — use single-quoted strings or write the HTML to a separate .html file
+- For HTML served by Express, always write it to public/index.html via write_file, then use express.static('public') — never inline large HTML in template literals inside server.js
+- When building HTML in JS, use string concatenation (+) not template literals if the HTML contains quotes or complex characters
+- Keep server.js under 4000 characters; put all HTML/CSS/JS in public/index.html
+
 If the user sends follow-up requests, iterate on the EXISTING files — rewrite only what needs to change, keep what works. You have the full conversation history.
 
 Sandbox ID: ${freshSb0.id}, Port: ${freshSb0.port}, Worker: ${SANDBOX_WORKER}`;
