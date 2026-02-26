@@ -623,6 +623,15 @@ let toolResult = '';
               toolResult = out.slice(0, 2000);
             }
           } else if (name === 'deploy') {
+            // Syntax-check before deploying to catch template literal issues early
+            try {
+              const syntaxCheck = sshRun(SANDBOX_WORKER, `node --check /opt/sandboxes/${sb.id}/${input.entry_point} 2>&1`);
+              if (syntaxCheck.trim()) {
+                toolResult = `Syntax error in ${input.entry_point} — fix before deploying:\n${syntaxCheck.slice(0, 800)}\n\nHINT: Replace any template literals (backticks) inside the html= template literal with string concatenation using +`;
+                toolResults.push({ type: 'tool_result', tool_use_id: toolId, content: toolResult, is_error: true });
+                continue;
+              }
+            } catch {}
             sshRun(SANDBOX_WORKER, `fuser -k ${freshSb.port}/tcp 2>/dev/null || true`);
             // Use nohup with explicit backgrounding that disconnects from SSH
             const startCmd = `nohup bash -c 'cd /opt/sandboxes/${sb.id} && PORT=${freshSb.port} node ${input.entry_point} >> /opt/sandboxes/${sb.id}/app.log 2>&1' > /dev/null 2>&1 &`;
@@ -631,8 +640,13 @@ let toolResult = '';
             // Verify it's running
             try {
               const check = sshRun(SANDBOX_WORKER, `curl -s --max-time 3 http://localhost:${freshSb.port}/ > /dev/null 2>&1 && echo running || echo starting`);
-              freshSb.status = 'deployed';
-              toolResult = `Deployed at http://${SANDBOX_WORKER}:${freshSb.port} (${check.trim()})`;
+              if (check.trim() === 'starting') {
+                const log = sshRun(SANDBOX_WORKER, `tail -10 /opt/sandboxes/${sb.id}/app.log 2>/dev/null || echo '(no log)'`);
+                toolResult = `Deploy may have failed — app not responding yet:\n${log}`;
+              } else {
+                freshSb.status = 'deployed';
+                toolResult = `Deployed at http://${SANDBOX_WORKER}:${freshSb.port} (${check.trim()})`;
+              }
             } catch {
               freshSb.status = 'deployed';
               toolResult = `Deployed at http://${SANDBOX_WORKER}:${freshSb.port}`;
