@@ -2010,7 +2010,8 @@ function WorkerBuilderTab() {
           <div>
             <div style={S.sectionTitle}>Live Preview — {selectedSb.title}</div>
             <iframe
-              src={selectedSb.url}
+              key={selectedSb.id}
+              src={`/api/sandbox/${selectedSb.id}/proxy`}
               style={{ width: '100%', height: '560px', border: T.border, borderRadius: T.radius, background: '#111' }}
               title={selectedSb.title}
             />
