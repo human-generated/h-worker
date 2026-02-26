@@ -1539,11 +1539,458 @@ function LinearTab() {
   );
 }
 
+
+// ── Sandbox Builder Tab ───────────────────────────────────────────────────────
+function SandboxTab() {
+  const [sandboxes, setSandboxes] = useState({});
+  const [activeSb, setActiveSb] = useState(null);
+  const [input, setInput] = useState('');
+  const [building, setBuilding] = useState(false);
+  const [pollTimer, setPollTimer] = useState(null);
+
+  async function loadSandboxes() {
+    try {
+      const r = await fetch('/api/sandbox');
+      const d = await r.json();
+      setSandboxes(d);
+    } catch {}
+  }
+
+  useEffect(() => {
+    loadSandboxes();
+  }, []);
+
+  // Poll active sandbox while building
+  useEffect(() => {
+    if (!activeSb || !building) {
+      if (pollTimer) { clearInterval(pollTimer); setPollTimer(null); }
+      return;
+    }
+    const t = setInterval(async () => {
+      try {
+        const r = await fetch(`/api/sandbox/${activeSb.id}`);
+        const d = await r.json();
+        if (d.id) {
+          setSandboxes(prev => ({ ...prev, [d.id]: d }));
+          setActiveSb(d);
+          if (d.status !== 'building') {
+            setBuilding(false);
+          }
+        }
+      } catch {}
+    }, 2000);
+    setPollTimer(t);
+    return () => clearInterval(t);
+  }, [activeSb?.id, building]);
+
+  async function startBuild() {
+    if (!input.trim() || building) return;
+    setBuilding(true);
+
+    // Create sandbox
+    const cr = await fetch('/api/sandbox', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ title: input.slice(0, 60) }),
+    });
+    const cd = await cr.json();
+    const sb = cd.sandbox;
+    setSandboxes(prev => ({ ...prev, [sb.id]: sb }));
+    setActiveSb(sb);
+
+    // Trigger build (async on master — returns immediately, we poll)
+    await fetch(`/api/sandbox/${sb.id}/chat`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ message: input }),
+    });
+    setInput('');
+  }
+
+  async function deleteSandbox(id) {
+    await fetch(`/api/sandbox/${id}`, { method: 'DELETE' });
+    setSandboxes(prev => { const n = { ...prev }; delete n[id]; return n; });
+    if (activeSb?.id === id) setActiveSb(null);
+  }
+
+  const sb = activeSb ? (sandboxes[activeSb.id] || activeSb) : null;
+  const sbList = Object.values(sandboxes).sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
+
+  const logStyle = {
+    background: '#0D0D0D', color: '#6CEFA0', fontFamily: T.mono, fontSize: '0.7rem',
+    lineHeight: 1.55, padding: '0.75rem', maxHeight: '300px', overflowY: 'auto',
+    whiteSpace: 'pre-wrap', wordBreak: 'break-all', borderRadius: T.radius,
+    border: '1px solid rgba(108,239,160,0.15)',
+  };
+
+  return (
+    <div style={{ display: 'flex', gap: '1.5rem', alignItems: 'flex-start' }}>
+      {/* Left: chat + sandbox list */}
+      <div style={{ width: 340, flexShrink: 0 }}>
+        <div style={S.section}>
+          <div style={S.sectionTitle}>Sandbox Builder</div>
+          <div style={{ ...S.card, marginBottom: '1rem' }}>
+            <div style={{ marginBottom: '0.5rem', color: T.muted, fontSize: '0.72rem', fontFamily: T.mono }}>
+              Describe an app to build and deploy
+            </div>
+            <textarea
+              value={input}
+              onChange={e => setInput(e.target.value)}
+              onKeyDown={e => { if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) startBuild(); }}
+              placeholder="Build a call center dashboard with call queue, agent status, customer lookup..."
+              disabled={building}
+              style={{
+                width: '100%', minHeight: 80, background: T.bg, border: T.border,
+                borderRadius: T.radius, padding: '0.5rem', color: T.text,
+                fontFamily: T.mono, fontSize: '0.78rem', resize: 'vertical',
+                outline: 'none', boxSizing: 'border-box', marginBottom: '0.5rem',
+              }}
+            />
+            <button
+              onClick={startBuild}
+              disabled={!input.trim() || building}
+              style={{ ...S.btn, opacity: (!input.trim() || building) ? 0.5 : 1, width: '100%' }}
+            >
+              {building ? 'Building...' : 'Build App'}
+            </button>
+          </div>
+        </div>
+
+        {sbList.length > 0 && (
+          <div style={S.section}>
+            <div style={S.sectionTitle}>Sandboxes ({sbList.length})</div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+              {sbList.map(s => (
+                <div key={s.id}
+                  onClick={() => setActiveSb(s)}
+                  style={{
+                    ...S.card, cursor: 'pointer', padding: '0.6rem 0.75rem',
+                    border: sb?.id === s.id ? `1px solid ${T.blue}` : S.card.border,
+                    background: sb?.id === s.id ? `${T.blue}10` : T.card,
+                  }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                    <span style={{ fontSize: '0.78rem', fontFamily: T.mono, color: T.text, flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                      {s.title}
+                    </span>
+                    <button
+                      onClick={e => { e.stopPropagation(); deleteSandbox(s.id); }}
+                      style={{ background: 'none', border: 'none', color: T.muted, cursor: 'pointer', fontSize: '0.9rem', padding: '0 2px', marginLeft: '0.5rem' }}>
+                      ×
+                    </button>
+                  </div>
+                  <div style={{ display: 'flex', gap: '0.5rem', marginTop: '0.25rem', alignItems: 'center' }}>
+                    <span style={{ ...S.badge(s.status === 'deployed' ? T.mint : s.status === 'building' ? T.orange : T.blue), fontSize: '0.6rem' }}>
+                      {s.status}
+                    </span>
+                    {s.url && (
+                      <a href={s.url} target="_blank" rel="noreferrer" onClick={e => e.stopPropagation()}
+                        style={{ color: T.muted, fontSize: '0.65rem', fontFamily: T.mono, textDecoration: 'none' }}>
+                        :{s.port} ↗
+                      </a>
+                    )}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+      </div>
+
+      {/* Right: build log + preview */}
+      <div style={{ flex: 1, minWidth: 0 }}>
+        {sb ? (
+          <>
+            <div style={S.section}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.75rem' }}>
+                <div style={S.sectionTitle}>{sb.title}</div>
+                <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
+                  <span style={S.badge(sb.status === 'deployed' ? T.mint : sb.status === 'building' ? T.orange : T.blue)}>
+                    {sb.status}
+                  </span>
+                  {sb.url && sb.status === 'deployed' && (
+                    <a href={sb.url} target="_blank" rel="noreferrer"
+                      style={{ color: T.blue, fontSize: '0.72rem', fontFamily: T.mono, textDecoration: 'none' }}>
+                      {sb.url} ↗
+                    </a>
+                  )}
+                </div>
+              </div>
+
+              {/* Build Log */}
+              {(sb.log || []).length > 0 && (
+                <div style={S.section}>
+                  <div style={S.sectionTitle}>Build Log</div>
+                  <div style={logStyle} ref={el => el && (el.scrollTop = el.scrollHeight)}>
+                    {(sb.log || []).map((entry, i) => (
+                      <div key={i} style={{ marginBottom: '0.25rem' }}>
+                        <span style={{ color: entry.tool === 'error' ? T.red : T.orange }}>[{entry.tool}]</span>{' '}
+                        <span style={{ color: '#A0FAB8' }}>{entry.result}</span>
+                      </div>
+                    ))}
+                    {building && <span style={{ color: T.orange }}>building...</span>}
+                  </div>
+                </div>
+              )}
+
+              {/* Live Preview */}
+              {sb.status === 'deployed' && sb.url && (
+                <div style={S.section}>
+                  <div style={S.sectionTitle}>Live Preview</div>
+                  <iframe
+                    src={sb.url}
+                    style={{ width: '100%', height: '500px', border: `1px solid ${T.border.split(' ').pop()}`, borderRadius: T.radius, background: '#111' }}
+                    title={sb.title}
+                  />
+                </div>
+              )}
+
+              {/* Suggested Workers */}
+              {(sb.suggested_workers || []).length > 0 && (
+                <div style={S.section}>
+                  <div style={S.sectionTitle}>Suggested Workers ({sb.suggested_workers.length})</div>
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', gap: '0.75rem' }}>
+                    {sb.suggested_workers.map(w => (
+                      <div key={w.id} style={S.card}>
+                        <div style={{ fontFamily: T.mono, fontSize: '0.78rem', color: T.blue, marginBottom: '0.25rem', fontWeight: 600 }}>
+                          {w.role}
+                        </div>
+                        <div style={{ fontSize: '0.75rem', color: T.muted, marginBottom: '0.75rem', lineHeight: 1.5 }}>
+                          {w.description}
+                        </div>
+                        {(w.scenarios || []).map(sc => (
+                          <div key={sc.name} style={{ marginBottom: '0.5rem', padding: '0.5rem', background: T.bg, borderRadius: T.radius }}>
+                            <div style={{ fontSize: '0.72rem', color: T.text, fontWeight: 600, marginBottom: '0.25rem' }}>{sc.name}</div>
+                            <div style={{ fontSize: '0.68rem', color: T.muted }}>{sc.description}</div>
+                          </div>
+                        ))}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+          </>
+        ) : (
+          <div style={{ ...S.card, textAlign: 'center', padding: '3rem', color: T.muted, fontFamily: T.mono, fontSize: '0.82rem' }}>
+            Describe an app on the left to build and deploy it
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ── Worker Builder Tab ────────────────────────────────────────────────────────
+function WorkerBuilderTab() {
+  const [sandboxes, setSandboxes] = useState({});
+  const [selectedId, setSelectedId] = useState('');
+  const [scenarioLogs, setScenarioLogs] = useState({});
+  const [runningScenarios, setRunningScenarios] = useState({});
+  const [continuousWorkers, setContinuousWorkers] = useState({});
+  const continuousRef = useRef({});
+
+  async function loadSandboxes() {
+    try {
+      const r = await fetch('/api/sandbox');
+      const d = await r.json();
+      setSandboxes(d);
+      // Auto-select first deployed sandbox
+      const deployed = Object.values(d).find(s => s.status === 'deployed');
+      if (deployed && !selectedId) setSelectedId(deployed.id);
+    } catch {}
+  }
+
+  useEffect(() => {
+    loadSandboxes();
+    const t = setInterval(loadSandboxes, 5000);
+    return () => clearInterval(t);
+  }, []);
+
+  // Manage continuous runners
+  useEffect(() => {
+    continuousRef.current = continuousWorkers;
+  }, [continuousWorkers]);
+
+  async function runScenario(sbId, workerId, scenarioName, script) {
+    const key = `${workerId}:${scenarioName}`;
+    setRunningScenarios(prev => ({ ...prev, [key]: true }));
+    try {
+      const r = await fetch(`/api/sandbox/${sbId}/scenario`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ script }),
+      });
+      const d = await r.json();
+      const output = d.output || d.stdout || JSON.stringify(d);
+      setScenarioLogs(prev => {
+        const existing = prev[key] || [];
+        const lines = [...existing, `[${new Date().toLocaleTimeString()}] ${output}`];
+        return { ...prev, [key]: lines.slice(-20) };
+      });
+    } catch (e) {
+      setScenarioLogs(prev => {
+        const existing = prev[key] || [];
+        return { ...prev, [key]: [...existing, `Error: ${e.message}`].slice(-20) };
+      });
+    }
+    setRunningScenarios(prev => ({ ...prev, [key]: false }));
+  }
+
+  function toggleContinuous(sbId, workerId, scenarioName, script) {
+    const key = `${workerId}:${scenarioName}`;
+    setContinuousWorkers(prev => {
+      const isOn = prev[key];
+      if (isOn) {
+        // Turn off — interval cleanup via ref
+        return { ...prev, [key]: false };
+      } else {
+        // Turn on
+        const run = async () => {
+          if (!continuousRef.current[key]) return;
+          await runScenario(sbId, workerId, scenarioName, script);
+          if (continuousRef.current[key]) {
+            setTimeout(run, 5000);
+          }
+        };
+        setTimeout(run, 100);
+        return { ...prev, [key]: true };
+      }
+    });
+  }
+
+  const sbList = Object.values(sandboxes).filter(s => s.status === 'deployed');
+  const selectedSb = selectedId ? sandboxes[selectedId] : null;
+
+  const logStyle = {
+    background: '#0D0D0D', color: '#6CEFA0', fontFamily: T.mono, fontSize: '0.65rem',
+    lineHeight: 1.5, padding: '0.5rem 0.75rem', maxHeight: '150px', overflowY: 'auto',
+    whiteSpace: 'pre-wrap', wordBreak: 'break-all', borderRadius: T.radius,
+    border: '1px solid rgba(108,239,160,0.15)', marginTop: '0.5rem',
+  };
+
+  return (
+    <div>
+      {/* Sandbox selector */}
+      <div style={{ ...S.section, display: 'flex', alignItems: 'center', gap: '1rem' }}>
+        <div style={S.sectionTitle}>Worker Builder</div>
+        <select
+          value={selectedId}
+          onChange={e => setSelectedId(e.target.value)}
+          style={{
+            background: T.card, border: T.border, borderRadius: T.radius,
+            padding: '0.38rem 0.75rem', fontFamily: T.mono, fontSize: '0.72rem',
+            color: T.text, cursor: 'pointer', outline: 'none',
+          }}>
+          <option value="">-- Select Sandbox --</option>
+          {sbList.map(s => (
+            <option key={s.id} value={s.id}>{s.title} ({s.url})</option>
+          ))}
+        </select>
+        {sbList.length === 0 && (
+          <span style={{ color: T.muted, fontFamily: T.mono, fontSize: '0.72rem' }}>
+            No deployed sandboxes yet — build one in the Sandbox Builder tab
+          </span>
+        )}
+      </div>
+
+      {selectedSb && (
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1.5rem', alignItems: 'flex-start' }}>
+          {/* Left: iframe preview */}
+          <div>
+            <div style={S.sectionTitle}>Live Preview — {selectedSb.title}</div>
+            <iframe
+              src={selectedSb.url}
+              style={{ width: '100%', height: '560px', border: T.border, borderRadius: T.radius, background: '#111' }}
+              title={selectedSb.title}
+            />
+            <div style={{ marginTop: '0.5rem', display: 'flex', gap: '0.75rem', alignItems: 'center' }}>
+              <a href={selectedSb.url} target="_blank" rel="noreferrer"
+                style={{ color: T.blue, fontSize: '0.72rem', fontFamily: T.mono, textDecoration: 'none' }}>
+                {selectedSb.url} ↗
+              </a>
+              <span style={{ color: T.muted, fontSize: '0.68rem', fontFamily: T.mono }}>
+                {selectedSb.id}
+              </span>
+            </div>
+          </div>
+
+          {/* Right: worker cards */}
+          <div>
+            <div style={S.sectionTitle}>Worker Agents ({(selectedSb.suggested_workers || []).length})</div>
+            {(selectedSb.suggested_workers || []).length === 0 ? (
+              <div style={{ ...S.card, color: T.muted, textAlign: 'center', padding: '2rem', fontFamily: T.mono, fontSize: '0.78rem' }}>
+                No worker agents suggested yet
+              </div>
+            ) : (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
+                {(selectedSb.suggested_workers || []).map(worker => (
+                  <div key={worker.id} style={S.card}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '0.5rem' }}>
+                      <div>
+                        <div style={{ fontFamily: T.mono, fontSize: '0.8rem', color: T.blue, fontWeight: 600 }}>{worker.role}</div>
+                        <div style={{ fontSize: '0.72rem', color: T.muted, marginTop: '0.2rem', lineHeight: 1.4 }}>{worker.description}</div>
+                      </div>
+                    </div>
+
+                    {(worker.scenarios || []).map(scenario => {
+                      const key = `${worker.id}:${scenario.name}`;
+                      const isRunning = runningScenarios[key];
+                      const isContinuous = continuousWorkers[key];
+                      const logs = scenarioLogs[key] || [];
+
+                      return (
+                        <div key={scenario.name} style={{ marginTop: '0.5rem', padding: '0.5rem 0.75rem', background: T.bg, borderRadius: T.radius }}>
+                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.25rem' }}>
+                            <div>
+                              <div style={{ fontSize: '0.75rem', color: T.text, fontWeight: 600, fontFamily: T.mono }}>{scenario.name}</div>
+                              <div style={{ fontSize: '0.68rem', color: T.muted, marginTop: '0.1rem' }}>{scenario.description}</div>
+                            </div>
+                            <div style={{ display: 'flex', gap: '0.4rem', flexShrink: 0, marginLeft: '0.75rem' }}>
+                              <button
+                                onClick={() => runScenario(selectedSb.id, worker.id, scenario.name, scenario.script)}
+                                disabled={isRunning}
+                                style={{ ...S.btnGhost, opacity: isRunning ? 0.5 : 1, fontSize: '0.65rem', padding: '0.25rem 0.6rem' }}>
+                                {isRunning ? 'running' : 'Run'}
+                              </button>
+                              <button
+                                onClick={() => toggleContinuous(selectedSb.id, worker.id, scenario.name, scenario.script)}
+                                style={{
+                                  ...S.btnGhost,
+                                  fontSize: '0.65rem', padding: '0.25rem 0.6rem',
+                                  background: isContinuous ? T.orange : T.card,
+                                  color: isContinuous ? '#0D0D0D' : T.muted,
+                                  border: isContinuous ? 'none' : S.btnGhost.border,
+                                }}>
+                                {isContinuous ? 'Stop 5s' : 'Run 5s'}
+                              </button>
+                            </div>
+                          </div>
+
+                          {logs.length > 0 && (
+                            <div style={logStyle}>
+                              {logs.map((line, i) => <div key={i}>{line}</div>)}
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+
 // ── Main Dashboard ────────────────────────────────────────────────────────────
 export default function Dashboard() {
   const [tab, setTab] = useState('workers');
   const [workers, setWorkers] = useState([]);
-  const tabs = [['workers','Workers'],['skills','Skills'],['nfs','NFS Share'],['linear','Linear'],['observability','Observability'],['settings','Settings']];
+  const tabs = [['workers','Workers'],['skills','Skills'],['nfs','NFS Share'],['linear','Linear'],['sandbox','Sandbox Builder'],['workers-builder','Worker Builder'],['observability','Observability'],['settings','Settings']];
 
   useEffect(() => {
     async function poll() {
@@ -1572,6 +2019,8 @@ export default function Dashboard() {
       {tab==='skills'  && <SkillsTab workers={workers} />}
       {tab==='nfs'     && <NFSTab />}
       {tab==='linear'   && <LinearTab />}
+      {tab==='sandbox'  && <SandboxTab />}
+      {tab==='workers-builder' && <WorkerBuilderTab />}
       {tab==='observability' && (
         <div style={{ textAlign: 'center', padding: '3rem 1rem' }}>
           <div style={{ color: T.muted, fontFamily: T.mono, fontSize: '0.82rem', marginBottom: '1.5rem' }}>

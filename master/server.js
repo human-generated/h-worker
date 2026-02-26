@@ -333,3 +333,354 @@ app.delete('/skills/:slug', (req, res) => {
     res.json({ ok: true });
   } catch(e) { res.status(500).json({ error: e.message }); }
 });
+
+// ── Sandbox Builder ────────────────────────────────────────────────────────
+const SANDBOXES_FILE = '/mnt/shared/sandboxes.json';
+const SANDBOX_WORKER = '164.90.197.224';
+const SSH_KEY = '/opt/hw-master/keys/openclaw-key.pem';
+const { execSync } = require('child_process');
+
+function loadSandboxes() {
+  try { return JSON.parse(fs.readFileSync(SANDBOXES_FILE, 'utf8')); } catch { return {}; }
+}
+function saveSandboxes(s) { fs.writeFileSync(SANDBOXES_FILE, JSON.stringify(s, null, 2)); }
+
+function nextSandboxPort() {
+  const sbs = loadSandboxes();
+  const used = new Set(Object.values(sbs).map(s => s.port).filter(Boolean));
+  for (let p = 8100; p <= 8199; p++) { if (!used.has(p)) return p; }
+  return 8100;
+}
+
+function sshRun(ip, cmd) {
+  return execSync(
+    `ssh -i ${SSH_KEY} -o IdentitiesOnly=yes -o StrictHostKeyChecking=no -o ConnectTimeout=10 root@${ip} ${JSON.stringify(cmd)}`,
+    { timeout: 30000, encoding: 'utf8' }
+  );
+}
+
+function sshWriteFile(ip, remotePath, content) {
+  // Write to temp file on master, then scp to worker
+  const tmpFile = `/tmp/sbx-write-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  fs.writeFileSync(tmpFile, content, 'utf8');
+  try {
+    execSync(
+      `scp -i ${SSH_KEY} -o IdentitiesOnly=yes -o StrictHostKeyChecking=no -o ConnectTimeout=10 '${tmpFile}' root@${ip}:'${remotePath}'`,
+      { timeout: 30000, encoding: 'utf8' }
+    );
+  } finally {
+    try { fs.unlinkSync(tmpFile); } catch {}
+  }
+}
+
+// GET /sandboxes
+app.get('/sandboxes', (req, res) => {
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.json(loadSandboxes());
+});
+
+// POST /sandboxes — create empty sandbox
+app.post('/sandboxes', (req, res) => {
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  const id = 'sbx-' + Date.now();
+  const port = nextSandboxPort();
+  const sb = {
+    id, port,
+    title: req.body.title || 'New Sandbox',
+    status: 'created',
+    worker_ip: SANDBOX_WORKER,
+    url: `http://${SANDBOX_WORKER}:${port}`,
+    messages: [],
+    log: [],
+    files: {},
+    suggested_workers: [],
+    created_at: new Date().toISOString(),
+  };
+  const sbs = loadSandboxes();
+  sbs[id] = sb;
+  saveSandboxes(sbs);
+  try { sshRun(SANDBOX_WORKER, `mkdir -p /opt/sandboxes/${id}`); } catch {}
+  res.json({ ok: true, sandbox: sb });
+});
+
+// POST /sandboxes/:id/chat — agentic build loop (polling-friendly, synchronous)
+app.post('/sandboxes/:id/chat', async (req, res) => {
+  res.setHeader('Access-Control-Allow-Origin', '*');
+
+  let sbs = loadSandboxes();
+  let sb = sbs[req.params.id];
+  if (!sb) return res.status(404).json({ error: 'sandbox not found' });
+
+  const userMsg = req.body.message;
+  sb.messages.push({ role: 'user', content: userMsg });
+  sb.status = 'building';
+  sb.log = sb.log || [];
+  sb.log.push({ tool: 'user', result: userMsg, at: new Date().toISOString() });
+  sbs[req.params.id] = sb;
+  saveSandboxes(sbs);
+
+  // Respond immediately so client can start polling
+  res.json({ ok: true, status: 'building', message: 'Build started, poll GET /sandboxes/:id for updates' });
+
+  // Load anthropic key
+  let anthropicKey = '';
+  try {
+    const keyData = JSON.parse(fs.readFileSync('/opt/hw-master/anthropic_key.json', 'utf8'));
+    anthropicKey = keyData.key || keyData.token || '';
+  } catch {}
+
+  const isOAuth = anthropicKey.startsWith('sk-ant-oat');
+  const authHeaders = isOAuth
+    ? { 'Authorization': `Bearer ${anthropicKey}`, 'anthropic-beta': 'oauth-2025-04-20' }
+    : { 'x-api-key': anthropicKey };
+
+  const TOOLS = [
+    {
+      name: 'write_file',
+      description: 'Write a file to the sandbox directory on the deployment worker',
+      input_schema: {
+        type: 'object',
+        properties: {
+          path: { type: 'string', description: 'Relative path within sandbox (e.g. server.js, public/index.html)' },
+          content: { type: 'string', description: 'Full file content' },
+        },
+        required: ['path', 'content'],
+      },
+    },
+    {
+      name: 'bash',
+      description: 'Run a bash command in the sandbox directory on the worker (e.g. npm install)',
+      input_schema: {
+        type: 'object',
+        properties: { command: { type: 'string' } },
+        required: ['command'],
+      },
+    },
+    {
+      name: 'deploy',
+      description: 'Start the application. Kills any existing process on the sandbox port and starts node with the given entry point.',
+      input_schema: {
+        type: 'object',
+        properties: { entry_point: { type: 'string', description: 'Main file to run, e.g. server.js' } },
+        required: ['entry_point'],
+      },
+    },
+    {
+      name: 'suggest_workers',
+      description: 'Propose worker agents that will simulate real interactions with the deployed app',
+      input_schema: {
+        type: 'object',
+        properties: {
+          workers: {
+            type: 'array',
+            items: {
+              type: 'object',
+              properties: {
+                id: { type: 'string' },
+                role: { type: 'string' },
+                description: { type: 'string' },
+                scenarios: {
+                  type: 'array',
+                  items: {
+                    type: 'object',
+                    properties: {
+                      name: { type: 'string' },
+                      description: { type: 'string' },
+                      script: { type: 'string', description: 'Bash script to execute the scenario' },
+                    },
+                    required: ['name', 'description', 'script'],
+                  },
+                },
+              },
+              required: ['id', 'role', 'description', 'scenarios'],
+            },
+          },
+        },
+        required: ['workers'],
+      },
+    },
+  ];
+
+  const freshSbs0 = loadSandboxes();
+  const freshSb0 = freshSbs0[sb.id] || sb;
+  const SYSTEM = `You are a full-stack developer building web applications on demand. IMPORTANT: Keep server.js under 6000 characters. Use concise but functional code.
+
+When given a description, build a complete working application:
+1. Use write_file to create all necessary files. Build a Node.js Express server (server.js) that serves static HTML and provides REST APIs. The HTML should be a single index.html with inline CSS and vanilla JS (no build step, no React, no bundler).
+2. Use bash("npm install express") to install dependencies (no package.json needed, just install inline).
+3. Use deploy("server.js") to start the app on port ${freshSb0.port} (always use PORT=${freshSb0.port} in server.js: const PORT = process.env.PORT || ${freshSb0.port}).
+4. Use suggest_workers with 3 specific worker agents with bash scripts using the real URL http://${SANDBOX_WORKER}:${freshSb0.port}.
+
+Make the apps visually polished with a dark professional UI (dark background, colored accents). Include real data, real API endpoints that actually work with in-memory state. The frontend should poll the APIs every 2-3 seconds to show live updates.
+
+Sandbox ID: ${freshSb0.id}, Port: ${freshSb0.port}, Worker: ${SANDBOX_WORKER}`;
+
+  let apiMessages = [{ role: 'user', content: userMsg }];
+  let finalText = '';
+
+  function addLog(tool, result) {
+    const freshSbs = loadSandboxes();
+    const freshSb = freshSbs[sb.id] || sb;
+    freshSb.log = freshSb.log || [];
+    freshSb.log.push({ tool, result: String(result).slice(0, 500), at: new Date().toISOString() });
+    freshSbs[sb.id] = freshSb;
+    saveSandboxes(freshSbs);
+  }
+
+  // Agentic tool loop — max 15 iterations
+  for (let iter = 0; iter < 15; iter++) {
+    let claudeResp;
+    try {
+      const resp = await fetch('https://api.anthropic.com/v1/messages', {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          'anthropic-version': '2023-06-01',
+          ...authHeaders,
+        },
+        body: JSON.stringify({
+          model: 'claude-sonnet-4-6',
+          max_tokens: 16000,
+          system: SYSTEM,
+          tools: TOOLS,
+          messages: apiMessages,
+        }),
+      });
+      claudeResp = await resp.json();
+    } catch (e) {
+      addLog('error', 'Claude API error: ' + e.message);
+      break;
+    }
+
+    if (claudeResp.error) {
+      addLog('error', claudeResp.error.message);
+      break;
+    }
+
+    const content = claudeResp.content || [];
+    apiMessages.push({ role: 'assistant', content });
+
+    const toolResults = [];
+    for (const block of content) {
+      if (block.type === 'text' && block.text) {
+        finalText = block.text;
+        addLog('text', block.text.slice(0, 300));
+      }
+      if (block.type === 'tool_use') {
+        const { name, input, id: toolId } = block;
+let toolResult = '';
+        const freshSbs = loadSandboxes();
+        const freshSb = freshSbs[sb.id] || sb;
+
+        try {
+          if (name === 'write_file') {
+            if (!input.path || input.content === undefined || input.content === null) {
+              toolResult = `Error: write_file requires path and content (got path=${input.path}, content type=${typeof input.content})`;
+            } else {
+              const remotePath = `/opt/sandboxes/${sb.id}/${input.path}`;
+              sshRun(SANDBOX_WORKER, `mkdir -p $(dirname '${remotePath}')`);
+              sshWriteFile(SANDBOX_WORKER, remotePath, input.content);
+              freshSb.files = freshSb.files || {};
+              freshSb.files[input.path] = input.content;
+              toolResult = `Written: ${input.path} (${String(input.content).length} bytes)`;
+            }
+          } else if (name === 'bash') {
+            if (!input.command) {
+              toolResult = 'Error: bash requires command parameter';
+            } else {
+              const out = sshRun(SANDBOX_WORKER, `cd /opt/sandboxes/${sb.id} && ${input.command} 2>&1`);
+              toolResult = out.slice(0, 2000);
+            }
+          } else if (name === 'deploy') {
+            sshRun(SANDBOX_WORKER, `fuser -k ${freshSb.port}/tcp 2>/dev/null || true`);
+            // Use nohup with explicit backgrounding that disconnects from SSH
+            const startCmd = `nohup bash -c 'cd /opt/sandboxes/${sb.id} && PORT=${freshSb.port} node ${input.entry_point} >> /opt/sandboxes/${sb.id}/app.log 2>&1' > /dev/null 2>&1 &`;
+            sshRun(SANDBOX_WORKER, startCmd);
+            await new Promise(r => setTimeout(r, 3000));
+            // Verify it's running
+            try {
+              const check = sshRun(SANDBOX_WORKER, `curl -s --max-time 3 http://localhost:${freshSb.port}/ > /dev/null 2>&1 && echo running || echo starting`);
+              freshSb.status = 'deployed';
+              toolResult = `Deployed at http://${SANDBOX_WORKER}:${freshSb.port} (${check.trim()})`;
+            } catch {
+              freshSb.status = 'deployed';
+              toolResult = `Deployed at http://${SANDBOX_WORKER}:${freshSb.port}`;
+            }
+          } else if (name === 'suggest_workers') {
+            freshSb.suggested_workers = input.workers;
+            toolResult = `Suggested ${input.workers.length} workers`;
+          }
+        } catch (e) {
+          toolResult = 'Error: ' + e.message;
+        }
+
+        freshSb.log = freshSb.log || [];
+        freshSb.log.push({ tool: name, result: toolResult.slice(0, 500), at: new Date().toISOString() });
+        freshSbs[sb.id] = freshSb;
+        saveSandboxes(freshSbs);
+
+        toolResults.push({ type: 'tool_result', tool_use_id: toolId, content: toolResult });
+      }
+    }
+
+    if (toolResults.length === 0) break;
+    apiMessages.push({ role: 'user', content: toolResults });
+  }
+
+  // Save final message
+  const finalSbs = loadSandboxes();
+  if (finalSbs[sb.id]) {
+    finalSbs[sb.id].messages.push({ role: 'assistant', content: finalText });
+    if (finalSbs[sb.id].status === 'building') finalSbs[sb.id].status = 'done';
+    saveSandboxes(finalSbs);
+  }
+});
+
+// GET /sandboxes/:id
+app.get('/sandboxes/:id', (req, res) => {
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  const sbs = loadSandboxes();
+  const sb = sbs[req.params.id];
+  if (!sb) return res.status(404).json({ error: 'not found' });
+  res.json(sb);
+});
+
+// POST /sandboxes/:id/scenario — run a worker scenario
+app.post('/sandboxes/:id/scenario', async (req, res) => {
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  const sbs = loadSandboxes();
+  const sb = sbs[req.params.id];
+  if (!sb) return res.status(404).json({ error: 'sandbox not found' });
+  const { script, worker_ip } = req.body;
+  if (!script) return res.status(400).json({ error: 'script required' });
+  const targetIp = worker_ip || SANDBOX_WORKER;
+  try {
+    const out = sshRun(targetIp, `bash -c ${JSON.stringify(script + ' 2>&1')}`);
+    res.json({ ok: true, output: out });
+  } catch (e) {
+    res.json({ ok: false, output: e.message, stdout: e.stdout || '' });
+  }
+});
+
+// DELETE /sandboxes/:id
+app.delete('/sandboxes/:id', (req, res) => {
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  const sbs = loadSandboxes();
+  const sb = sbs[req.params.id];
+  if (sb) {
+    try { sshRun(sb.worker_ip, `fuser -k ${sb.port}/tcp 2>/dev/null || true; rm -rf /opt/sandboxes/${sb.id}`); } catch {}
+    delete sbs[req.params.id];
+    saveSandboxes(sbs);
+  }
+  res.json({ ok: true });
+});
+
+// CORS OPTIONS for sandbox routes
+['', '/:id', '/:id/chat', '/:id/scenario'].forEach(path => {
+  app.options('/sandboxes' + path, (req, res) => {
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.setHeader('Access-Control-Allow-Methods', 'GET,POST,DELETE,OPTIONS');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+    res.sendStatus(204);
+  });
+});
