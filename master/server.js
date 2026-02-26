@@ -654,11 +654,21 @@ app.post('/sandboxes/:id/scenario', async (req, res) => {
   const { script, worker_ip } = req.body;
   if (!script) return res.status(400).json({ error: 'script required' });
   const targetIp = worker_ip || SANDBOX_WORKER;
+  // Write script to temp file, scp to worker, run it
+  const tmpLocal = `/tmp/scenario-${Date.now()}.sh`;
+  const tmpRemote = `/tmp/scenario-${Date.now()}.sh`;
   try {
-    const out = sshRun(targetIp, `bash -c ${JSON.stringify(script + ' 2>&1')}`);
+    fs.writeFileSync(tmpLocal, script, 'utf8');
+    execSync(
+      `scp -i ${SSH_KEY} -o IdentitiesOnly=yes -o StrictHostKeyChecking=no -o ConnectTimeout=10 '${tmpLocal}' root@${targetIp}:'${tmpRemote}'`,
+      { timeout: 15000, encoding: 'utf8' }
+    );
+    const out = sshRun(targetIp, `bash '${tmpRemote}' 2>&1; rm -f '${tmpRemote}'`);
     res.json({ ok: true, output: out });
   } catch (e) {
-    res.json({ ok: false, output: e.message, stdout: e.stdout || '' });
+    res.json({ ok: false, output: e.message });
+  } finally {
+    try { fs.unlinkSync(tmpLocal); } catch {}
   }
 });
 
