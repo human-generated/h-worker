@@ -506,10 +506,29 @@ function TaskWindow({ taskId, initialTask, onClose, offsetIndex, allTasks }) {
 
 // ── Settings Tab ──────────────────────────────────────────────────────────────
 const SECRET_DEFS = [
-  { key: 'elevenlabs', label: 'ElevenLabs API Key', placeholder: 'sk_...', hint: 'Text-to-speech' },
-  { key: 'wavespeed',  label: 'WaveSpeed API Key',  placeholder: 'ws_...', hint: 'AI video generation' },
-  { key: 'openai',     label: 'OpenAI API Key',     placeholder: 'sk-...', hint: 'GPT models' },
-  { key: 'anthropic',  label: 'Anthropic API Key',  placeholder: 'sk-ant-...', hint: 'Claude (orchestrator)' },
+  // AI / LLM
+  { key: 'anthropic',            label: 'Anthropic API Key',        placeholder: 'sk-ant-...', hint: 'Claude models', group: 'AI' },
+  { key: 'claude_code_oauth_token', label: 'Claude Code OAuth Token', placeholder: 'sk-ant-oat01-...', hint: 'Claude Code CLI', group: 'AI' },
+  { key: 'perplexity',           label: 'Perplexity API Key',       placeholder: 'pplx-...', hint: 'Search-augmented LLM', group: 'AI' },
+  { key: 'novita',               label: 'Novita API Key',           placeholder: '...', hint: 'Image / video gen', group: 'AI' },
+  { key: 'fal',                  label: 'FAL Key',                  placeholder: 'xxx:yyy', hint: 'Fast image gen', group: 'AI' },
+  // Voice
+  { key: 'elevenlabs',           label: 'ElevenLabs API Key',       placeholder: 'sk_...', hint: 'Text-to-speech', group: 'Voice' },
+  { key: 'cartesia',             label: 'Cartesia API Key',         placeholder: 'sk_car_...', hint: 'Low-latency TTS', group: 'Voice' },
+  { key: 'deepgram',             label: 'Deepgram API Key',         placeholder: '...', hint: 'Speech-to-text', group: 'Voice' },
+  // Observability
+  { key: 'langfuse_secret',      label: 'Langfuse Secret Key',      placeholder: 'sk-lf-...', hint: 'LLM observability', group: 'Observability' },
+  { key: 'langfuse_public',      label: 'Langfuse Public Key',      placeholder: 'pk-lf-...', hint: 'Langfuse public', group: 'Observability' },
+  { key: 'langfuse_host',        label: 'Langfuse Host',            placeholder: 'https://...', hint: 'Self-hosted URL', group: 'Observability' },
+  // Communications
+  { key: 'twilio_sid',           label: 'Twilio Account SID',       placeholder: 'AC...', hint: 'SMS / calls', group: 'Comms' },
+  { key: 'twilio_auth_token',    label: 'Twilio Auth Token',        placeholder: '...', hint: 'Twilio auth', group: 'Comms' },
+  { key: 'telegram_bot_token',   label: 'Telegram Bot Token',       placeholder: '123:ABC...', hint: 'Telegram bot', group: 'Comms' },
+  // Cloud / Dev
+  { key: 'github',               label: 'GitHub Token',             placeholder: 'ghp_...', hint: 'Repo access', group: 'Cloud' },
+  { key: 'aws_access_key_id',    label: 'AWS Access Key ID',        placeholder: 'AKIA...', hint: 'AWS access', group: 'Cloud' },
+  { key: 'aws_secret_access_key',label: 'AWS Secret Access Key',    placeholder: '...', hint: 'AWS secret', group: 'Cloud' },
+  { key: 'wavespeed',            label: 'WaveSpeed API Key',        placeholder: 'ws_...', hint: 'AI video generation', group: 'AI' },
 ];
 function SettingsTab() {
   const [keys, setKeys] = useState({});
@@ -534,48 +553,52 @@ function SettingsTab() {
     } finally { setSaving(false); }
   }
 
+  const groups = [...new Set(SECRET_DEFS.map(d => d.group))];
+
   return (
-    <div>
-      <div style={{ ...S.section, maxWidth: 560 }}>
-        <div style={S.sectionTitle}>Secrets</div>
-        <div style={{ ...S.card, display: 'flex', flexDirection: 'column', gap: '1.1rem' }}>
-          <div style={{ fontFamily: T.mono, fontSize: '0.68rem', color: T.muted }}>
-            Stored in <code>/mnt/shared/keys.json</code> — available to all workers via NFS.
-          </div>
-          {SECRET_DEFS.map(({ key: k, label, placeholder, hint }) => {
+    <div style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem', maxWidth: 640 }}>
+      <div style={{ fontFamily: T.mono, fontSize: '0.68rem', color: T.muted }}>
+        Stored in <code>/mnt/shared/keys.json</code> — synced to all workers via NFS.
+        {msg && <span style={{ color: '#22C55E', marginLeft: '1rem' }}>{msg}</span>}
+      </div>
+      {groups.map(group => (
+        <div key={group} style={S.section}>
+          <div style={S.sectionTitle}>{group}</div>
+          <div style={{ ...S.card, display: 'flex', flexDirection: 'column', gap: '0.9rem' }}>
+          {SECRET_DEFS.filter(d => d.group === group).map(({ key: k, label, placeholder, hint }) => {
             const val = keys[k] || '';
             const isEdit = editing === k;
             return (
               <div key={k}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.35rem' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.3rem' }}>
                   <span style={{ fontFamily: T.mono, fontSize: '0.72rem', fontWeight: 600 }}>{label}</span>
-                  <span style={{ fontFamily: T.mono, fontSize: '0.62rem', color: T.muted }}>{hint}</span>
-                  <span style={{ width: 7, height: 7, borderRadius: '50%', background: val ? '#22C55E' : '#E5E7EB', display: 'inline-block', marginLeft: 'auto', flexShrink: 0 }} />
+                  <span style={{ fontFamily: T.mono, fontSize: '0.6rem', color: T.muted }}>{hint}</span>
+                  <span style={{ width: 7, height: 7, borderRadius: '50%', background: val ? '#22C55E' : '#444', display: 'inline-block', marginLeft: 'auto', flexShrink: 0 }} title={val ? 'set' : 'not set'} />
                 </div>
                 {isEdit ? (
                   <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
-                    <input autoFocus style={{ ...S.input, fontSize: '0.8rem', flex: 1 }}
+                    <input autoFocus style={{ ...S.input, fontSize: '0.78rem', flex: 1 }}
                       value={draft} onChange={e => setDraft(e.target.value)}
                       placeholder={placeholder}
                       onKeyDown={e => { if (e.key === 'Enter') save(k); if (e.key === 'Escape') setEditing(null); }} />
-                    <button style={{ ...S.btn, padding: '0.35rem 0.9rem' }} onClick={() => save(k)} disabled={saving}>save</button>
-                    <button style={{ ...S.btnGhost, padding: '0.35rem 0.75rem' }} onClick={() => setEditing(null)}>cancel</button>
+                    <button style={{ ...S.btn, padding: '0.3rem 0.8rem' }} onClick={() => save(k)} disabled={saving}>save</button>
+                    <button style={{ ...S.btnGhost, padding: '0.3rem 0.65rem' }} onClick={() => setEditing(null)}>✕</button>
                   </div>
                 ) : (
                   <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
-                    <code style={{ fontFamily: T.mono, fontSize: '0.75rem', color: val ? T.text : 'rgba(0,0,0,0.25)', flex: 1 }}>
-                      {val ? val.slice(0, 12) + '···' + val.slice(-4) : 'not set'}
+                    <code style={{ fontFamily: T.mono, fontSize: '0.72rem', color: val ? T.text : T.muted, flex: 1 }}>
+                      {val ? val.slice(0, 14) + '···' + val.slice(-4) : 'not set'}
                     </code>
-                    <button style={{ ...S.btnGhost, padding: '0.25rem 0.75rem', fontSize: '0.68rem' }}
+                    <button style={{ ...S.btnGhost, padding: '0.2rem 0.65rem', fontSize: '0.65rem' }}
                       onClick={() => { setEditing(k); setDraft(val); }}>edit</button>
                   </div>
                 )}
               </div>
             );
           })}
-          {msg && <div style={{ fontFamily: T.mono, fontSize: '0.7rem', color: '#22C55E' }}>{msg}</div>}
+          </div>
         </div>
-      </div>
+      ))}
     </div>
   );
 }
