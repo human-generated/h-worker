@@ -1,5 +1,7 @@
 'use client';
 import { useState, useEffect, useRef, useCallback } from 'react';
+import AppTemplatesTab from './AppTemplatesTab';
+import AgentTemplatesTab from './AgentTemplatesTab';
 
 // ── Design tokens (Habit Sequence × H-Worker merge) ──────────────────────────
 const T = {
@@ -2102,7 +2104,7 @@ function WorkerBuilderTab() {
 export default function Dashboard() {
   const [tab, setTab] = useState('workers');
   const [workers, setWorkers] = useState([]);
-  const tabs = [['workers','Workers'],['skills','Skills'],['nfs','NFS Share'],['linear','Linear'],['sandbox','Sandbox Builder'],['workers-builder','Worker Builder'],['observability','Observability'],['settings','Settings']];
+  const tabs = [['workers','Workers'],['skills','Skills'],['nfs','NFS Share'],['linear','Linear'],['sandbox','Sandbox Builder'],['workers-builder','Worker Builder'],['app-templates','App Templates'],['agent-templates','Agent Templates'],['observability','Observability'],['settings','Settings']];
 
   useEffect(() => {
     async function poll() {
@@ -2133,6 +2135,8 @@ export default function Dashboard() {
       {tab==='linear'   && <LinearTab />}
       {tab==='sandbox'  && <SandboxTab />}
       {tab==='workers-builder' && <WorkerBuilderTab />}
+      {tab==='app-templates' && <AppTemplatesTab />}
+      {tab==='agent-templates' && <AgentTemplatesTab />}
       {tab==='observability' && (
         <div style={{ textAlign: 'center', padding: '3rem 1rem' }}>
           <div style={{ color: T.muted, fontFamily: T.mono, fontSize: '0.82rem', marginBottom: '1.5rem' }}>

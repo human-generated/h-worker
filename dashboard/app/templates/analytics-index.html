@@ -1,0 +1,162 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"><title>Analytics Dashboard</title>
+<style>
+* { margin:0; padding:0; box-sizing:border-box; }
+body { background:#0a0a0f; color:#e2e8f0; font-family:'Segoe UI',sans-serif; }
+.header { background:#111827; border-bottom:1px solid #1e293b; padding:1rem 1.5rem; display:flex; align-items:center; justify-content:space-between; }
+.header h1 { font-size:1.1rem; font-weight:700; }
+.kpi-grid { display:grid; grid-template-columns:repeat(4,1fr); gap:1rem; padding:1rem 1.5rem; }
+.kpi-card { background:#111827; border-radius:10px; padding:1rem 1.25rem; border:1px solid #1e293b; position:relative; overflow:hidden; }
+.kpi-card::after { content:''; position:absolute; top:0; left:0; right:0; height:3px; }
+.kpi-pageviews::after { background:linear-gradient(90deg,#3b82f6,#60a5fa); }
+.kpi-revenue::after { background:linear-gradient(90deg,#22c55e,#4ade80); }
+.kpi-signups::after { background:linear-gradient(90deg,#a855f7,#c084fc); }
+.kpi-errors::after { background:linear-gradient(90deg,#ef4444,#f87171); }
+.kpi-label { font-size:0.68rem; color:#64748b; text-transform:uppercase; letter-spacing:0.06em; margin-bottom:0.5rem; }
+.kpi-value { font-size:2rem; font-weight:800; line-height:1; }
+.kpi-pageviews .kpi-value { color:#3b82f6; }
+.kpi-revenue .kpi-value { color:#22c55e; }
+.kpi-signups .kpi-value { color:#a855f7; }
+.kpi-errors .kpi-value { color:#ef4444; }
+.kpi-sub { font-size:0.72rem; color:#64748b; margin-top:0.3rem; }
+.charts-grid { display:grid; grid-template-columns:2fr 1fr; gap:1rem; padding:0 1.5rem 1rem; }
+.chart-card { background:#111827; border-radius:10px; padding:1rem 1.25rem; border:1px solid #1e293b; }
+.chart-title { font-size:0.78rem; font-weight:600; color:#94a3b8; text-transform:uppercase; letter-spacing:0.06em; margin-bottom:1rem; }
+.bar-chart { display:flex; align-items:flex-end; gap:2px; height:100px; }
+.bar { flex:1; border-radius:2px 2px 0 0; transition:height 0.3s; min-height:2px; }
+.bar:hover { opacity:0.8; }
+.line-chart { position:relative; height:100px; }
+.event-log { background:#111827; border-radius:10px; padding:1rem 1.25rem; border:1px solid #1e293b; margin:0 1.5rem 1rem; }
+.event-row { display:flex; gap:0.75rem; align-items:center; padding:0.3rem 0; border-bottom:1px solid #1e293b11; font-size:0.75rem; }
+.event-metric { padding:0.1rem 0.5rem; border-radius:10px; font-size:0.65rem; font-weight:700; text-transform:uppercase; }
+.em-pageviews { background:#1e3a5f; color:#60a5fa; }
+.em-revenue { background:#14532d30; color:#4ade80; }
+.em-signups { background:#2d1b69; color:#c084fc; }
+.em-errors { background:#7f1d1d22; color:#f87171; }
+.event-value { font-weight:700; color:#f1f5f9; }
+.event-time { color:#475569; margin-left:auto; }
+</style>
+</head>
+<body>
+<div class="header">
+  <h1>Analytics Dashboard</h1>
+  <span style="color:#64748b;font-size:0.75rem;" id="last-update">Live · updates every 10s</span>
+</div>
+<div class="kpi-grid">
+  <div class="kpi-card kpi-pageviews"><div class="kpi-label">Pageviews Today</div><div class="kpi-value" id="kpi-pv">-</div><div class="kpi-sub">last 24h</div></div>
+  <div class="kpi-card kpi-revenue"><div class="kpi-label">Revenue Today</div><div class="kpi-value" id="kpi-rev">-</div><div class="kpi-sub">last 24h</div></div>
+  <div class="kpi-card kpi-signups"><div class="kpi-label">New Signups</div><div class="kpi-value" id="kpi-su">-</div><div class="kpi-sub">last 24h</div></div>
+  <div class="kpi-card kpi-errors"><div class="kpi-label">Errors</div><div class="kpi-value" id="kpi-err">-</div><div class="kpi-sub">last 24h</div></div>
+</div>
+<div class="charts-grid">
+  <div class="chart-card">
+    <div class="chart-title">Pageviews - Last 24h (hourly)</div>
+    <div class="bar-chart" id="pv-chart"></div>
+    <div style="display:flex;justify-content:space-between;font-size:0.62rem;color:#475569;margin-top:4px;">
+      <span>24h ago</span><span>now</span>
+    </div>
+  </div>
+  <div class="chart-card">
+    <div class="chart-title">7-Day Revenue</div>
+    <div class="line-chart" id="rev-chart"></div>
+    <div style="display:flex;justify-content:space-between;font-size:0.62rem;color:#475569;margin-top:4px;">
+      <span>7d ago</span><span>today</span>
+    </div>
+  </div>
+</div>
+<div class="event-log">
+  <div style="font-size:0.78rem;font-weight:600;color:#94a3b8;text-transform:uppercase;letter-spacing:0.06em;margin-bottom:0.75rem;">Real-time Event Log</div>
+  <div id="event-log"></div>
+</div>
+<script>
+function fmtNum(n) {
+  if (n >= 1000000) return (n/1000000).toFixed(1) + 'M';
+  if (n >= 1000) return (n/1000).toFixed(1) + 'k';
+  return Math.round(n).toString();
+}
+function fmtCurrency(n) {
+  if (n >= 1000000) return '$' + (n/1000000).toFixed(1) + 'M';
+  if (n >= 1000) return '$' + (n/1000).toFixed(1) + 'k';
+  return '$' + Math.round(n);
+}
+function fmtTime(ts) {
+  const diff = Date.now() - ts;
+  if (diff < 60000) return Math.floor(diff/1000) + 's ago';
+  if (diff < 3600000) return Math.floor(diff/60000) + 'm ago';
+  return Math.floor(diff/3600000) + 'h ago';
+}
+
+function groupByHour(events) {
+  const hourMap = {};
+  events.forEach(e => {
+    const h = Math.floor(e.ts / 3600000) * 3600000;
+    hourMap[h] = (hourMap[h] || 0) + e.value;
+  });
+  return Object.entries(hourMap).sort((a,b) => a[0]-b[0]).map(([ts, val]) => ({ ts: parseInt(ts), val }));
+}
+
+function groupByDay(events) {
+  const dayMap = {};
+  events.forEach(e => {
+    const d = Math.floor(e.ts / 86400000) * 86400000;
+    dayMap[d] = (dayMap[d] || 0) + e.value;
+  });
+  return Object.entries(dayMap).sort((a,b) => a[0]-b[0]).map(([ts, val]) => ({ ts: parseInt(ts), val }));
+}
+
+async function fetchData() {
+  try {
+    const [metrics24, metrics7d, recent] = await Promise.all([
+      fetch('/api/metrics?hours=24').then(r => r.json()),
+      fetch('/api/metrics?hours=168').then(r => r.json()),
+      fetch('/api/events/recent').then(r => r.json())
+    ]);
+
+    const sum = (arr) => arr.reduce((s, e) => s + e.value, 0);
+    document.getElementById('kpi-pv').textContent = fmtNum(sum(metrics24.pageviews || []));
+    document.getElementById('kpi-rev').textContent = fmtCurrency(sum(metrics24.revenue || []));
+    document.getElementById('kpi-su').textContent = fmtNum(sum(metrics24.signups || []));
+    document.getElementById('kpi-err').textContent = fmtNum(sum(metrics24.errors || []));
+
+    const pvHourly = groupByHour(metrics24.pageviews || []);
+    const maxPv = Math.max(...pvHourly.map(h => h.val), 1);
+    document.getElementById('pv-chart').innerHTML = pvHourly.map(h =>
+      '<div class="bar" style="height:' + Math.max(2, Math.round((h.val/maxPv)*96)) + 'px;background:linear-gradient(180deg,#3b82f6,#1d4ed8);" title="' + fmtNum(h.val) + '"></div>'
+    ).join('');
+
+    const revDaily = groupByDay(metrics7d.revenue || []).slice(-7);
+    const maxRev = Math.max(...revDaily.map(d => d.val), 1);
+    const points = revDaily.map((d, i) => {
+      const x = Math.round((i / (revDaily.length - 1 || 1)) * 280);
+      const y = Math.round(90 - (d.val / maxRev) * 80);
+      return x + ',' + y;
+    }).join(' ');
+    document.getElementById('rev-chart').innerHTML =
+      '<svg width="100%" height="100" viewBox="0 0 280 100" preserveAspectRatio="none">' +
+      '<polyline points="' + points + '" fill="none" stroke="#22c55e" stroke-width="2.5" />' +
+      revDaily.map((d, i) => {
+        const x = Math.round((i / (revDaily.length - 1 || 1)) * 280);
+        const y = Math.round(90 - (d.val / maxRev) * 80);
+        return '<circle cx="' + x + '" cy="' + y + '" r="3" fill="#22c55e" />';
+      }).join('') +
+      '</svg>';
+
+    document.getElementById('event-log').innerHTML = recent.map(e =>
+      '<div class="event-row">' +
+      '<span class="event-metric em-' + e.metric + '">' + e.metric + '</span>' +
+      '<span class="event-value">' + (e.metric === 'revenue' ? fmtCurrency(e.value) : fmtNum(e.value)) + '</span>' +
+      '<span class="event-time">' + fmtTime(e.ts) + '</span>' +
+      '</div>'
+    ).join('');
+
+    document.getElementById('last-update').textContent = 'Updated: ' + new Date().toLocaleTimeString();
+  } catch(e) {}
+}
+
+fetchData();
+setInterval(fetchData, 3000);
+</script>
+</body>
+</html>

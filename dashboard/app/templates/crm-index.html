@@ -1,0 +1,102 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"><title>CRM Pipeline</title>
+<style>
+* { margin:0; padding:0; box-sizing:border-box; }
+body { background:#0a0a0f; color:#e2e8f0; font-family:'Segoe UI',sans-serif; overflow-x:hidden; }
+.header { background:#111827; border-bottom:1px solid #1e293b; padding:1rem 1.5rem; display:flex; align-items:center; justify-content:space-between; }
+.header h1 { font-size:1.1rem; font-weight:700; color:#f1f5f9; }
+.pipeline { display:flex; gap:1rem; padding:1rem 1.5rem; overflow-x:auto; min-height:calc(100vh - 120px); }
+.stage-col { min-width:220px; flex:1; display:flex; flex-direction:column; gap:0.5rem; }
+.stage-header { padding:0.5rem 0.75rem; border-radius:8px 8px 0 0; font-size:0.75rem; font-weight:700; text-transform:uppercase; letter-spacing:0.06em; display:flex; justify-content:space-between; align-items:center; }
+.stage-lead { background:#1e293b; color:#94a3b8; }
+.stage-prospect { background:#1c1917; color:#fb923c; }
+.stage-qualified { background:#1a1f2e; color:#60a5fa; }
+.stage-proposal { background:#1a1a2e; color:#a78bfa; }
+.stage-closed { background:#14532d30; color:#4ade80; }
+.contact-card { background:#1e293b; border-radius:8px; padding:0.75rem; border:1px solid #334155; cursor:pointer; transition:all 0.15s; }
+.contact-card:hover { border-color:#3b82f6; transform:translateY(-1px); }
+.contact-name { font-size:0.88rem; font-weight:600; color:#f1f5f9; }
+.contact-company { font-size:0.72rem; color:#64748b; margin:0.15rem 0; }
+.contact-value { font-size:0.82rem; color:#22c55e; font-weight:600; }
+.contact-owner { font-size:0.68rem; color:#475569; float:right; }
+.activity-feed { background:#111827; border-top:1px solid #1e293b; padding:0.75rem 1.5rem; max-height:180px; overflow-y:auto; }
+.activity-feed h3 { font-size:0.72rem; color:#64748b; text-transform:uppercase; letter-spacing:0.06em; margin-bottom:0.5rem; }
+.activity-item { display:flex; gap:0.75rem; align-items:flex-start; padding:0.35rem 0; border-bottom:1px solid #1e293b11; }
+.activity-type { font-size:0.68rem; font-weight:600; padding:0.1rem 0.5rem; border-radius:10px; flex-shrink:0; text-transform:uppercase; }
+.type-call { background:#1e3a5f; color:#60a5fa; }
+.type-email { background:#14532d30; color:#4ade80; }
+.type-meeting { background:#451a03; color:#fb923c; }
+.type-note { background:#2d1b69; color:#a78bfa; }
+.activity-note { font-size:0.78rem; color:#94a3b8; flex:1; }
+.activity-contact { font-size:0.68rem; color:#64748b; }
+</style>
+</head>
+<body>
+<div class="header">
+  <h1>CRM Pipeline</h1>
+  <span style="color:#64748b;font-size:0.75rem;" id="pipeline-summary">Loading...</span>
+</div>
+<div class="pipeline" id="pipeline"></div>
+<div class="activity-feed">
+  <h3>Recent Activities</h3>
+  <div id="activities"></div>
+</div>
+<script>
+const STAGES = ['lead','prospect','qualified','proposal','closed'];
+const STAGE_LABELS = { lead:'Lead', prospect:'Prospect', qualified:'Qualified', proposal:'Proposal', closed:'Closed Won' };
+
+function fmtVal(v) {
+  if (v >= 1000000) return '$' + (v/1000000).toFixed(1) + 'M';
+  if (v >= 1000) return '$' + (v/1000).toFixed(0) + 'k';
+  return '$' + v;
+}
+
+async function fetchAll() {
+  const [contacts, activities] = await Promise.all([
+    fetch('/api/contacts').then(r => r.json()),
+    fetch('/api/activities').then(r => r.json())
+  ]);
+
+  const byStage = {};
+  STAGES.forEach(s => { byStage[s] = []; });
+  contacts.forEach(c => { if (byStage[c.stage]) byStage[c.stage].push(c); });
+
+  const totalValue = contacts.reduce((s, c) => s + c.value, 0);
+  document.getElementById('pipeline-summary').textContent = contacts.length + ' contacts | ' + fmtVal(totalValue) + ' pipeline value';
+
+  document.getElementById('pipeline').innerHTML = STAGES.map(stage => {
+    const cards = byStage[stage] || [];
+    const stageVal = cards.reduce((s, c) => s + c.value, 0);
+    return '<div class="stage-col">' +
+      '<div class="stage-header stage-' + stage + '"><span>' + STAGE_LABELS[stage] + '</span><span>' + cards.length + ' | ' + fmtVal(stageVal) + '</span></div>' +
+      cards.map(c =>
+        '<div class="contact-card">' +
+        '<span class="contact-owner">' + c.owner + '</span>' +
+        '<div class="contact-name">' + c.name + '</div>' +
+        '<div class="contact-company">' + c.company + '</div>' +
+        '<div class="contact-value">' + fmtVal(c.value) + '</div>' +
+        '</div>'
+      ).join('') +
+      '</div>';
+  }).join('');
+
+  document.getElementById('activities').innerHTML = activities.slice(0, 15).map(a => {
+    const ts = new Date(a.created_at);
+    const relTime = Math.floor((Date.now() - a.created_at) / 3600000);
+    const timeStr = relTime < 24 ? relTime + 'h ago' : Math.floor(relTime/24) + 'd ago';
+    return '<div class="activity-item">' +
+      '<span class="activity-type type-' + a.type + '">' + a.type + '</span>' +
+      '<div style="flex:1">' +
+      '<div class="activity-note">' + (a.note || '') + '</div>' +
+      '<div class="activity-contact">' + a.contact_name + ' &middot; ' + timeStr + '</div>' +
+      '</div></div>';
+  }).join('');
+}
+
+fetchAll();
+setInterval(fetchAll, 3000);
+</script>
+</body>
+</html>

@@ -1,0 +1,163 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"><title>Support Center</title>
+<style>
+* { margin:0; padding:0; box-sizing:border-box; }
+body { background:#0a0a0f; color:#e2e8f0; font-family:'Segoe UI',sans-serif; display:flex; height:100vh; overflow:hidden; }
+#sidebar { width:300px; background:#111827; border-right:1px solid #1e293b; display:flex; flex-direction:column; flex-shrink:0; }
+#sidebar-header { padding:1rem; border-bottom:1px solid #1e293b; }
+#sidebar-header h2 { font-size:1rem; font-weight:700; }
+#sidebar-header small { color:#64748b; font-size:0.72rem; }
+#ticket-list { flex:1; overflow-y:auto; }
+.ticket-item { padding:0.75rem 1rem; border-bottom:1px solid #1e293b11; cursor:pointer; transition:background 0.1s; }
+.ticket-item:hover { background:#1e293b44; }
+.ticket-item.active { background:#1e293b; border-left:3px solid #3b82f6; }
+.ticket-subject { font-size:0.82rem; font-weight:600; color:#f1f5f9; margin-bottom:0.2rem; }
+.ticket-meta { display:flex; gap:0.5rem; align-items:center; }
+.priority-dot { width:7px; height:7px; border-radius:50%; flex-shrink:0; }
+.p-critical { background:#ef4444; }
+.p-high { background:#f97316; }
+.p-medium { background:#eab308; }
+.p-low { background:#6b7280; }
+.priority-label { font-size:0.65rem; font-weight:700; text-transform:uppercase; }
+.pl-critical { color:#ef4444; }
+.pl-high { color:#f97316; }
+.pl-medium { color:#eab308; }
+.pl-low { color:#6b7280; }
+.ticket-customer { font-size:0.68rem; color:#64748b; margin-left:auto; }
+.sla-badge { font-size:0.62rem; color:#ef4444; font-weight:700; background:#7f1d1d22; padding:0.1rem 0.4rem; border-radius:4px; }
+#main { flex:1; display:flex; flex-direction:column; overflow:hidden; }
+#agents-bar { background:#0f172a; border-bottom:1px solid #1e293b; padding:0.5rem 1rem; display:flex; gap:1rem; overflow-x:auto; }
+.agent-chip { display:flex; align-items:center; gap:0.4rem; background:#1e293b; border-radius:20px; padding:0.3rem 0.75rem; font-size:0.72rem; white-space:nowrap; }
+.agent-dot { width:7px; height:7px; border-radius:50%; }
+.s-available { background:#22c55e; }
+.s-busy { background:#f59e0b; }
+.s-break { background:#6b7280; }
+#ticket-detail { flex:1; overflow-y:auto; padding:1.5rem; }
+#no-selection { display:flex; align-items:center; justify-content:center; height:100%; color:#334155; font-size:0.88rem; }
+.detail-subject { font-size:1.1rem; font-weight:700; margin-bottom:0.5rem; }
+.detail-meta { display:flex; gap:1rem; font-size:0.72rem; color:#64748b; margin-bottom:1.5rem; }
+.comment { background:#1e293b; border-radius:8px; padding:0.75rem 1rem; margin-bottom:0.75rem; }
+.comment-author { font-size:0.75rem; font-weight:700; color:#3b82f6; margin-bottom:0.3rem; }
+.comment-content { font-size:0.85rem; color:#cbd5e1; line-height:1.5; }
+.comment-time { font-size:0.65rem; color:#475569; margin-top:0.3rem; }
+#status-badge { padding:0.2rem 0.7rem; border-radius:12px; font-size:0.68rem; font-weight:700; text-transform:uppercase; }
+</style>
+</head>
+<body>
+<div id="sidebar">
+  <div id="sidebar-header">
+    <h2>Support Queue</h2>
+    <small id="queue-summary">Loading...</small>
+  </div>
+  <div id="ticket-list"></div>
+</div>
+<div id="main">
+  <div id="agents-bar" id="agents-bar"></div>
+  <div id="ticket-detail">
+    <div id="no-selection">Select a ticket to view details</div>
+    <div id="ticket-content" style="display:none">
+      <div class="detail-subject" id="d-subject"></div>
+      <div class="detail-meta">
+        <span id="d-customer"></span>
+        <span id="d-status-wrap"></span>
+        <span id="d-priority"></span>
+        <span id="d-created"></span>
+      </div>
+      <div id="comments-list"></div>
+    </div>
+  </div>
+</div>
+<script>
+let selectedTicketId = null;
+let tickets = [];
+
+function fmtTime(ts) {
+  const diff = Date.now() - ts;
+  if (diff < 3600000) return Math.floor(diff / 60000) + 'm ago';
+  if (diff < 86400000) return Math.floor(diff / 3600000) + 'h ago';
+  return Math.floor(diff / 86400000) + 'd ago';
+}
+
+function slaRemaining(ticket) {
+  const limits = { critical: 3600000, high: 14400000, medium: 86400000, low: 259200000 };
+  const limit = limits[ticket.priority] || 86400000;
+  const elapsed = Date.now() - ticket.created_at;
+  if (ticket.status === 'resolved') return null;
+  const remaining = limit - elapsed;
+  if (remaining <= 0) return 'SLA BREACH';
+  if (remaining < limit * 0.2) return Math.floor(remaining / 60000) + 'm left';
+  return null;
+}
+
+async function fetchAll() {
+  const [tks, ags] = await Promise.all([
+    fetch('/api/tickets').then(r => r.json()),
+    fetch('/api/agents').then(r => r.json())
+  ]);
+  tickets = tks;
+
+  const open = tks.filter(t => t.status !== 'resolved').length;
+  const critical = tks.filter(t => t.priority === 'critical' && t.status !== 'resolved').length;
+  document.getElementById('queue-summary').textContent = open + ' open | ' + critical + ' critical';
+
+  document.getElementById('ticket-list').innerHTML = tks.map(t => {
+    const sla = slaRemaining(t);
+    return '<div class="ticket-item' + (t.id === selectedTicketId ? ' active' : '') + '" data-id="' + t.id + '">' +
+      '<div class="ticket-subject">' + t.subject.slice(0, 45) + (t.subject.length > 45 ? '...' : '') + '</div>' +
+      '<div class="ticket-meta">' +
+      '<span class="priority-dot p-' + t.priority + '"></span>' +
+      '<span class="priority-label pl-' + t.priority + '">' + t.priority + '</span>' +
+      (sla ? '<span class="sla-badge">' + sla + '</span>' : '') +
+      '<span class="ticket-customer">' + t.customer.slice(0, 20) + '</span>' +
+      '</div></div>';
+  }).join('');
+
+  document.getElementById('agents-bar').innerHTML = '<span style="font-size:0.68rem;color:#475569;line-height:2;">Agents:</span>' +
+    ags.map(a =>
+      '<div class="agent-chip"><span class="agent-dot s-' + a.status + '"></span><span>' + a.name.split(' ')[0] + '</span><span style="color:#475569;">' + a.tickets_handled + '</span></div>'
+    ).join('');
+
+  document.querySelectorAll('.ticket-item').forEach(el => {
+    el.addEventListener('click', () => selectTicket(parseInt(el.dataset.id)));
+  });
+
+  if (selectedTicketId) fetchComments(selectedTicketId);
+}
+
+function selectTicket(id) {
+  selectedTicketId = id;
+  const t = tickets.find(x => x.id === id);
+  if (!t) return;
+  document.querySelectorAll('.ticket-item').forEach(el => el.classList.toggle('active', parseInt(el.dataset.id) === id));
+  document.getElementById('no-selection').style.display = 'none';
+  document.getElementById('ticket-content').style.display = '';
+  document.getElementById('d-subject').textContent = t.subject;
+  document.getElementById('d-customer').textContent = 'Customer: ' + t.customer;
+  const statusColors = { open:'#f59e0b', in_progress:'#3b82f6', resolved:'#22c55e' };
+  document.getElementById('d-status-wrap').innerHTML = '<span id="status-badge" style="background:' + (statusColors[t.status] || '#64748b') + '22;color:' + (statusColors[t.status] || '#64748b') + ';">' + t.status.replace('_',' ') + '</span>';
+  document.getElementById('d-priority').textContent = 'Priority: ' + t.priority;
+  document.getElementById('d-created').textContent = fmtTime(t.created_at);
+  fetchComments(id);
+}
+
+async function fetchComments(ticketId) {
+  try {
+    const comments = await fetch('/api/comments?ticket_id=' + ticketId).then(r => r.json());
+    document.getElementById('comments-list').innerHTML = '<div style="font-size:0.72rem;color:#64748b;text-transform:uppercase;letter-spacing:0.06em;margin-bottom:0.75rem;">Thread (' + comments.length + ')</div>' +
+      comments.map(c =>
+        '<div class="comment">' +
+        '<div class="comment-author">' + c.author + '</div>' +
+        '<div class="comment-content">' + c.content + '</div>' +
+        '<div class="comment-time">' + fmtTime(c.created_at) + '</div>' +
+        '</div>'
+      ).join('');
+  } catch(e) {}
+}
+
+fetchAll();
+setInterval(fetchAll, 2000);
+</script>
+</body>
+</html>

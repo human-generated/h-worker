@@ -1,0 +1,134 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"><title>E-Commerce</title>
+<style>
+* { margin:0; padding:0; box-sizing:border-box; }
+body { background:#0a0a0f; color:#e2e8f0; font-family:'Segoe UI',sans-serif; }
+.header { background:#111827; border-bottom:1px solid #1e293b; padding:1rem 1.5rem; display:flex; align-items:center; justify-content:space-between; }
+.header h1 { font-size:1.2rem; font-weight:700; color:#f1f5f9; }
+.stats-bar { display:grid; grid-template-columns:repeat(3,1fr); gap:1rem; padding:1rem 1.5rem; background:#0f172a; border-bottom:1px solid #1e293b; }
+.stat { background:#1e293b; border-radius:8px; padding:0.75rem 1rem; }
+.stat-label { font-size:0.68rem; color:#64748b; text-transform:uppercase; letter-spacing:0.06em; }
+.stat-value { font-size:1.5rem; font-weight:700; margin-top:0.2rem; }
+.tabs { display:flex; gap:0; border-bottom:1px solid #1e293b; background:#111827; }
+.tab { padding:0.75rem 1.5rem; cursor:pointer; font-size:0.82rem; color:#64748b; border-bottom:2px solid transparent; transition:all 0.15s; }
+.tab.active { color:#3b82f6; border-bottom-color:#3b82f6; }
+#content { padding:1.5rem; }
+.product-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(200px,1fr)); gap:1rem; }
+.product-card { background:#1e293b; border-radius:10px; overflow:hidden; border:1px solid #334155; transition:transform 0.15s; }
+.product-card:hover { transform:translateY(-2px); }
+.product-img { width:100%; height:130px; object-fit:cover; background:#0a0a0f; }
+.product-body { padding:0.75rem; }
+.product-name { font-size:0.85rem; font-weight:600; color:#f1f5f9; }
+.product-cat { font-size:0.68rem; color:#64748b; margin:0.2rem 0; }
+.product-row { display:flex; justify-content:space-between; align-items:center; margin-top:0.5rem; }
+.product-price { font-size:1rem; font-weight:700; color:#22c55e; }
+.product-stock { font-size:0.68rem; color:#94a3b8; }
+.filter-row { display:flex; gap:0.5rem; margin-bottom:1rem; }
+.filter-btn { padding:0.35rem 0.9rem; border-radius:20px; border:1px solid #334155; background:transparent; color:#94a3b8; cursor:pointer; font-size:0.75rem; transition:all 0.15s; }
+.filter-btn.active { background:#3b82f6; border-color:#3b82f6; color:#fff; }
+.order-list { display:flex; flex-direction:column; gap:0.75rem; }
+.order-row { background:#1e293b; border-radius:8px; padding:0.75rem 1rem; display:flex; align-items:center; gap:1rem; }
+.order-id { font-family:monospace; font-size:0.75rem; color:#64748b; width:60px; }
+.order-customer { font-weight:600; font-size:0.88rem; flex:1; }
+.order-total { font-size:0.95rem; color:#22c55e; font-weight:700; }
+.badge { padding:0.2rem 0.6rem; border-radius:20px; font-size:0.68rem; font-weight:600; text-transform:uppercase; }
+.badge-delivered { background:#14532d; color:#4ade80; }
+.badge-shipped { background:#1e3a5f; color:#60a5fa; }
+.badge-processing { background:#451a03; color:#fb923c; }
+.badge-pending { background:#1f2937; color:#9ca3af; }
+</style>
+</head>
+<body>
+<div class="header">
+  <h1>ShopHW - E-Commerce</h1>
+  <span style="color:#64748b;font-size:0.78rem;">Live inventory management</span>
+</div>
+<div class="stats-bar" id="stats">
+  <div class="stat"><div class="stat-label">Total Revenue</div><div class="stat-value" style="color:#22c55e;">$0</div></div>
+  <div class="stat"><div class="stat-label">Orders</div><div class="stat-value" style="color:#3b82f6;">0</div></div>
+  <div class="stat"><div class="stat-label">Products</div><div class="stat-value" style="color:#f59e0b;">0</div></div>
+</div>
+<div class="tabs">
+  <div class="tab active" data-tab="products">Products</div>
+  <div class="tab" data-tab="orders">Orders</div>
+</div>
+<div id="content">
+  <div id="products-tab">
+    <div class="filter-row">
+      <button class="filter-btn active" data-cat="">All</button>
+      <button class="filter-btn" data-cat="Electronics">Electronics</button>
+      <button class="filter-btn" data-cat="Clothing">Clothing</button>
+      <button class="filter-btn" data-cat="Books">Books</button>
+    </div>
+    <div class="product-grid" id="product-grid"></div>
+  </div>
+  <div id="orders-tab" style="display:none">
+    <div class="order-list" id="order-list"></div>
+  </div>
+</div>
+<script>
+let currentCat = '';
+let allOrders = [];
+
+function fmtPrice(p) { return '$' + Number(p).toFixed(2); }
+function fmtDate(ts) { return new Date(ts).toLocaleDateString(); }
+function badgeClass(s) { return 'badge badge-' + s; }
+
+async function fetchProducts() {
+  const url = '/api/products' + (currentCat ? '?category=' + currentCat : '');
+  const products = await fetch(url).then(r => r.json());
+  document.getElementById('product-grid').innerHTML = products.map(p =>
+    '<div class="product-card">' +
+    '<img class="product-img" src="' + p.image_url + '" alt="' + p.name + '" />' +
+    '<div class="product-body">' +
+    '<div class="product-name">' + p.name + '</div>' +
+    '<div class="product-cat">' + p.category + '</div>' +
+    '<div class="product-row"><span class="product-price">' + fmtPrice(p.price) + '</span><span class="product-stock">Stock: ' + p.stock + '</span></div>' +
+    '</div></div>'
+  ).join('');
+  document.querySelector('.stat:nth-child(3) .stat-value').textContent = products.length;
+}
+
+async function fetchOrders() {
+  allOrders = await fetch('/api/orders').then(r => r.json());
+  document.getElementById('order-list').innerHTML = allOrders.map(o =>
+    '<div class="order-row">' +
+    '<span class="order-id">#' + o.id + '</span>' +
+    '<span class="order-customer">' + o.customer + '</span>' +
+    '<span class="order-total">' + fmtPrice(o.total) + '</span>' +
+    '<span class="' + badgeClass(o.status) + '">' + o.status + '</span>' +
+    '<span style="font-size:0.68rem;color:#475569;">' + fmtDate(o.created_at) + '</span>' +
+    '</div>'
+  ).join('');
+  const revenue = allOrders.reduce((s, o) => s + o.total, 0);
+  document.querySelector('.stat:nth-child(1) .stat-value').textContent = fmtPrice(revenue);
+  document.querySelector('.stat:nth-child(2) .stat-value').textContent = allOrders.length;
+}
+
+document.querySelectorAll('.tab').forEach(t => {
+  t.addEventListener('click', () => {
+    document.querySelectorAll('.tab').forEach(x => x.classList.remove('active'));
+    t.classList.add('active');
+    const tab = t.dataset.tab;
+    document.getElementById('products-tab').style.display = tab === 'products' ? '' : 'none';
+    document.getElementById('orders-tab').style.display = tab === 'orders' ? '' : 'none';
+  });
+});
+
+document.querySelectorAll('.filter-btn').forEach(b => {
+  b.addEventListener('click', () => {
+    document.querySelectorAll('.filter-btn').forEach(x => x.classList.remove('active'));
+    b.classList.add('active');
+    currentCat = b.dataset.cat;
+    fetchProducts();
+  });
+});
+
+fetchProducts();
+fetchOrders();
+setInterval(() => { fetchProducts(); fetchOrders(); }, 3000);
+</script>
+</body>
+</html>

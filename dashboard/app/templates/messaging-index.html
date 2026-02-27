@@ -1,0 +1,103 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"><title>Messaging</title>
+<style>
+* { margin:0; padding:0; box-sizing:border-box; }
+body { background:#0a0a0f; color:#e2e8f0; font-family:'Segoe UI',sans-serif; display:flex; height:100vh; overflow:hidden; }
+#sidebar { width:220px; background:#111827; border-right:1px solid #1e293b; display:flex; flex-direction:column; flex-shrink:0; }
+#sidebar-header { padding:1rem; border-bottom:1px solid #1e293b; }
+#sidebar-header h2 { font-size:1rem; font-weight:700; color:#f1f5f9; }
+#sidebar-header small { color:#64748b; font-size:0.72rem; }
+.channel-item { padding:0.6rem 1rem; cursor:pointer; display:flex; align-items:center; gap:0.5rem; font-size:0.85rem; color:#94a3b8; border-left:3px solid transparent; transition:all 0.15s; }
+.channel-item:hover { background:#1e293b; color:#e2e8f0; }
+.channel-item.active { background:#1e293b; color:#3b82f6; border-left-color:#3b82f6; font-weight:600; }
+#main { flex:1; display:flex; flex-direction:column; overflow:hidden; }
+#chat-header { padding:0.75rem 1.25rem; border-bottom:1px solid #1e293b; background:#111827; display:flex; align-items:center; gap:0.5rem; }
+#chat-header h3 { font-size:0.95rem; font-weight:600; }
+#chat-header span { color:#64748b; font-size:0.75rem; }
+#messages { flex:1; overflow-y:auto; padding:1rem 1.25rem; display:flex; flex-direction:column; gap:0.5rem; }
+.msg { display:flex; flex-direction:column; }
+.msg-header { display:flex; align-items:baseline; gap:0.6rem; margin-bottom:0.15rem; }
+.msg-user { font-weight:700; font-size:0.82rem; color:#3b82f6; }
+.msg-time { font-size:0.68rem; color:#475569; }
+.msg-content { background:#1e293b; padding:0.5rem 0.75rem; border-radius:0 8px 8px 8px; font-size:0.85rem; line-height:1.5; max-width:600px; color:#cbd5e1; }
+#input-area { padding:1rem 1.25rem; border-top:1px solid #1e293b; background:#111827; display:flex; gap:0.75rem; align-items:center; }
+#username-input { background:#1e293b; border:1px solid #334155; border-radius:6px; padding:0.5rem 0.75rem; color:#e2e8f0; font-size:0.82rem; width:120px; outline:none; }
+#msg-input { flex:1; background:#1e293b; border:1px solid #334155; border-radius:6px; padding:0.5rem 0.75rem; color:#e2e8f0; font-size:0.85rem; outline:none; }
+#send-btn { background:#3b82f6; color:#fff; border:none; border-radius:6px; padding:0.5rem 1.25rem; cursor:pointer; font-weight:600; font-size:0.85rem; }
+#send-btn:hover { background:#2563eb; }
+</style>
+</head>
+<body>
+<div id="sidebar">
+  <div id="sidebar-header"><h2>HW Chat</h2><small>Real-time messaging</small></div>
+  <div id="channels">
+    <div style="padding:0.5rem 1rem;font-size:0.68rem;color:#475569;text-transform:uppercase;letter-spacing:0.08em;margin-top:0.5rem;">Channels</div>
+    <div class="channel-item active" data-ch="general"># general</div>
+    <div class="channel-item" data-ch="dev"># dev</div>
+    <div class="channel-item" data-ch="random"># random</div>
+  </div>
+</div>
+<div id="main">
+  <div id="chat-header"><h3 id="ch-name">#general</h3><span id="msg-count">0 messages</span></div>
+  <div id="messages"></div>
+  <div id="input-area">
+    <input id="username-input" placeholder="Your name" value="user" />
+    <input id="msg-input" placeholder="Message #general..." />
+    <button id="send-btn">Send</button>
+  </div>
+</div>
+<script>
+let currentChannel = 'general';
+let lastCount = 0;
+function fmtTime(ts) {
+  const d = new Date(ts);
+  return d.toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'});
+}
+function renderMessages(msgs) {
+  const container = document.getElementById('messages');
+  if (msgs.length === lastCount && msgs.length > 0) return;
+  lastCount = msgs.length;
+  container.innerHTML = msgs.map(m =>
+    '<div class="msg"><div class="msg-header"><span class="msg-user">' + m.username + '</span><span class="msg-time">' + fmtTime(m.created_at) + '</span></div><div class="msg-content">' + escHtml(m.content) + '</div></div>'
+  ).join('');
+  document.getElementById('msg-count').textContent = msgs.length + ' messages';
+  container.scrollTop = container.scrollHeight;
+}
+function escHtml(s) { return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+async function fetchMessages() {
+  try {
+    const r = await fetch('/api/messages?channel=' + currentChannel);
+    const msgs = await r.json();
+    renderMessages(msgs);
+    document.getElementById('msg-input').placeholder = 'Message #' + currentChannel + '...';
+    document.getElementById('ch-name').textContent = '#' + currentChannel;
+  } catch(e) {}
+}
+document.querySelectorAll('.channel-item').forEach(el => {
+  el.addEventListener('click', () => {
+    document.querySelectorAll('.channel-item').forEach(x => x.classList.remove('active'));
+    el.classList.add('active');
+    currentChannel = el.dataset.ch;
+    lastCount = 0;
+    fetchMessages();
+  });
+});
+document.getElementById('send-btn').addEventListener('click', async () => {
+  const content = document.getElementById('msg-input').value.trim();
+  const username = document.getElementById('username-input').value.trim() || 'user';
+  if (!content) return;
+  try {
+    await fetch('/api/messages', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({channel:currentChannel,username,content}) });
+    document.getElementById('msg-input').value = '';
+    lastCount = 0;
+    fetchMessages();
+  } catch(e) {}
+});
+document.getElementById('msg-input').addEventListener('keydown', e => { if (e.key === 'Enter') document.getElementById('send-btn').click(); });
+fetchMessages();
+setInterval(fetchMessages, 2000);
+</script>
+</body>
+</html>

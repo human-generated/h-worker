@@ -731,11 +731,129 @@ app.delete('/sandboxes/:id', (req, res) => {
 });
 
 // CORS OPTIONS for sandbox routes
-['', '/:id', '/:id/chat', '/:id/scenario'].forEach(path => {
+['', '/:id', '/:id/chat', '/:id/scenario', '/deploy-template'].forEach(path => {
   app.options('/sandboxes' + path, (req, res) => {
     res.setHeader('Access-Control-Allow-Origin', '*');
     res.setHeader('Access-Control-Allow-Methods', 'GET,POST,DELETE,OPTIONS');
     res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
     res.sendStatus(204);
   });
+});
+
+// POST /sandboxes/deploy-template — deploy a pre-built template to a sandbox
+app.post('/sandboxes/deploy-template', async (req, res) => {
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  const { title, files, npm_packages, entry_point } = req.body;
+  if (!files || !files.length) return res.status(400).json({ ok: false, error: 'files required' });
+
+  const id = 'sbx-' + Date.now();
+  const port = nextSandboxPort();
+  const sb = {
+    id, port,
+    title: title || 'Template App',
+    status: 'deploying',
+    worker_ip: SANDBOX_WORKER,
+    url: 'http://' + SANDBOX_WORKER + ':' + port,
+    messages: [],
+    log: [],
+    files: {},
+    suggested_workers: [],
+    created_at: new Date().toISOString(),
+  };
+  const sbs = loadSandboxes();
+  sbs[id] = sb;
+  saveSandboxes(sbs);
+
+  try {
+    // Create directory on worker
+    sshRun(SANDBOX_WORKER, 'mkdir -p /opt/sandboxes/' + id);
+
+    // Write each file
+    for (const f of files) {
+      const remotePath = '/opt/sandboxes/' + id + '/' + f.path;
+      sshRun(SANDBOX_WORKER, "mkdir -p $(dirname '" + remotePath + "')");
+      sshWriteFile(SANDBOX_WORKER, remotePath, f.content);
+      sb.files[f.path] = f.content;
+    }
+
+    // npm install
+    const packages = (npm_packages || []).join(' ');
+    if (packages) {
+      const installOut = sshRun(SANDBOX_WORKER, 'cd /opt/sandboxes/' + id + ' && npm install ' + packages + ' 2>&1');
+      sb.log.push({ tool: 'npm_install', result: installOut.slice(0, 500), at: new Date().toISOString() });
+    }
+
+    // Syntax check
+    const ep = entry_point || 'server.js';
+    try {
+      const checkOut = sshRun(SANDBOX_WORKER, 'node --check /opt/sandboxes/' + id + '/' + ep + ' 2>&1');
+      if (checkOut && checkOut.trim()) {
+        const freshSbs = loadSandboxes();
+        if (freshSbs[id]) { freshSbs[id].status = 'error'; saveSandboxes(freshSbs); }
+        return res.json({ ok: false, error: 'Syntax error: ' + checkOut.slice(0, 500) });
+      }
+    } catch (syntaxErr) {
+      const freshSbs = loadSandboxes();
+      if (freshSbs[id]) { freshSbs[id].status = 'error'; saveSandboxes(freshSbs); }
+      return res.json({ ok: false, error: 'Syntax error: ' + syntaxErr.message.slice(0, 500) });
+    }
+
+    // Kill any old process on port, start app
+    sshRun(SANDBOX_WORKER, 'fuser -k ' + port + '/tcp 2>/dev/null || true');
+    const startCmd = "nohup bash -c 'cd /opt/sandboxes/" + id + " && PORT=" + port + " node " + ep + " >> /opt/sandboxes/" + id + "/app.log 2>&1' > /dev/null 2>&1 &";
+    sshRun(SANDBOX_WORKER, startCmd);
+
+    // Wait 4 seconds then verify
+    await new Promise(r => setTimeout(r, 4000));
+    let verified = false;
+    try {
+      const check = sshRun(SANDBOX_WORKER, 'curl -s --max-time 3 http://localhost:' + port + '/ > /dev/null 2>&1 && echo running || echo starting');
+      verified = check.trim() === 'running';
+    } catch {}
+
+    const freshSbs = loadSandboxes();
+    if (freshSbs[id]) {
+      freshSbs[id].status = 'deployed';
+      freshSbs[id].files = sb.files;
+      freshSbs[id].log = sb.log;
+      saveSandboxes(freshSbs);
+    }
+
+    res.json({ ok: true, sandbox: { ...sb, status: 'deployed', verified } });
+  } catch (e) {
+    const freshSbs = loadSandboxes();
+    if (freshSbs[id]) { freshSbs[id].status = 'error'; saveSandboxes(freshSbs); }
+    res.json({ ok: false, error: e.message });
+  }
+});
+
+// POST /agent/run-script — run a standalone bash script on worker-1
+app.options('/agent/run-script', (req, res) => {
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', 'POST,OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+  res.sendStatus(204);
+});
+
+app.post('/agent/run-script', (req, res) => {
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  const { script, args } = req.body;
+  if (!script) return res.status(400).json({ ok: false, output: 'script required' });
+
+  const tmpLocal = '/tmp/agent-script-' + Date.now() + '.sh';
+  const tmpRemote = '/tmp/agent-script-' + Date.now() + '.sh';
+  try {
+    fs.writeFileSync(tmpLocal, script, 'utf8');
+    execSync(
+      'scp -i ' + SSH_KEY + ' -o IdentitiesOnly=yes -o StrictHostKeyChecking=no -o ConnectTimeout=10 \'' + tmpLocal + '\' root@' + SANDBOX_WORKER + ':\'' + tmpRemote + '\'',
+      { timeout: 15000, encoding: 'utf8' }
+    );
+    const argStr = (args || []).map(a => JSON.stringify(String(a))).join(' ');
+    const out = sshRun(SANDBOX_WORKER, 'bash \'' + tmpRemote + '\' ' + argStr + ' 2>&1; rm -f \'' + tmpRemote + '\'');
+    res.json({ ok: true, output: out });
+  } catch (e) {
+    res.json({ ok: false, output: e.message });
+  } finally {
+    try { fs.unlinkSync(tmpLocal); } catch {}
+  }
 });
